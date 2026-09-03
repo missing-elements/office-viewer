@@ -2,19 +2,17 @@
 
 ## Project
 
-Repository: `missing-elements/office-viewer`
-
-Package: `@missing-elements/office-viewer`
-
-Custom element: `<office-viewer>`
+- Repository: `missing-elements/office-viewer`
+- Package: `@missing-elements/office-viewer`
+- Custom element: `<office-viewer>`
 
 ## Vision
 
-Build a framework-neutral, read-only Web Component that renders Office Open XML documents directly in the browser without uploading files to a server and without embedding a full Office editor runtime.
+Build a framework-neutral, read-only Web Component that renders Office Open XML documents directly in the browser without uploading files to a service and without embedding a full Office editor runtime.
 
 ## Scope
 
-### Initial supported formats
+### Initial formats
 
 - `.docx`
 - `.xlsx`
@@ -22,20 +20,19 @@ Build a framework-neutral, read-only Web Component that renders Office Open XML 
 
 ### Explicitly out of scope
 
-- PDF support; PDF remains the responsibility of `@missing-elements/pdfjs-viewer-element`.
+- PDF. PDF remains the responsibility of `@missing-elements/pdfjs-viewer-element`.
 - Editing or mutation APIs.
-- Saving or lossless round-tripping of Office documents.
-- Collaboration.
+- Saving or lossless round-tripping.
+- Collaboration or server-side document sessions.
 - Macro execution.
 - Running embedded OLE applications.
 - Legacy binary formats such as `.doc`, `.xls`, and `.ppt`.
-- PowerPoint animations and transitions unless supported later by the underlying library.
+- PowerPoint animations and transitions unless later supported by the upstream engine.
+- Printing in the initial common API.
 
 ## Core dependency
 
 Use `@silurus/ooxml` as the rendering engine. Do not use ONLYOFFICE, `x2t`, `pdfjs-dist`, or `pdfjs-viewer-element` in this package.
-
-The intended runtime pipeline is:
 
 ```text
 DOCX / XLSX / PPTX
@@ -44,15 +41,17 @@ DOCX / XLSX / PPTX
 @silurus/ooxml Rust/WASM parser
         |
         v
-validated document model
+validated format-specific model
         |
         v
 Canvas renderer
 ```
 
-## Related project conventions
+`@missing-elements/office-viewer` is an orchestration and presentation layer around the upstream format-specific viewers. It must not duplicate their document models or parser logic.
 
-Follow the development stack and conventions used by `missing-elements/pdfjs-viewer`:
+## Development stack
+
+Follow the conventions of `missing-elements/pdfjs-viewer`:
 
 - TypeScript
 - pnpm
@@ -61,8 +60,8 @@ Follow the development stack and conventions used by `missing-elements/pdfjs-vie
 - Vitest browser tests
 - WebdriverIO browser provider
 - generated TypeScript declarations
-- `src/`, `types/`, `tests/`, `demo/`, and `scripts/` directories
 - ESM package output
+- `src/`, `types/`, `tests/`, `demo/`, and `scripts/`
 - strict lifecycle and browser compatibility tests
 
 ## Architecture
@@ -85,25 +84,66 @@ src/
     error-view.ts
     toolbar.ts
   themes/
-    paper-and-ink.css
+    shell.css
 ```
 
-### Custom element
+The custom element owns Shadow DOM, status UI, attributes, source resolution, adapter selection, common events, resize handling, and lifecycle. Adapters own format-specific upstream viewer instances.
 
-`office-viewer-element.ts` owns:
+## Upstream API study — mandatory first step
 
-- Shadow DOM creation.
-- Observed attributes and property reflection.
-- Viewer container creation.
-- Loading, error, and empty states.
-- Adapter selection.
-- Common event dispatch.
-- Resize handling.
-- Destruction and reconnection behavior.
+Before finalizing the public API, carefully read the current `@silurus/ooxml` README, generated declarations, format documentation, examples, and bundle-size documentation.
 
-### Source resolver
+Verify:
 
-Support these sources:
+- constructors and `load()` signatures for DOCX, XLSX, and PPTX;
+- accepted source types;
+- `DocxScrollViewer`, `XlsxViewer`, and `PptxScrollViewer` behavior;
+- worker-mode options and fallback behavior;
+- destroy and ownership semantics;
+- zoom, fit, navigation, find, and hyperlink APIs;
+- progressive-layout callbacks and completion semantics;
+- WASM URL configuration;
+- worker asset handling;
+- stable error types and codes;
+- optional renderer injection;
+- bundler and static-hosting behavior.
+
+Record verified facts and deviations in `docs/ooxml-integration-notes.md`. Do not treat the provisional interfaces in this plan as verified until this step is complete.
+
+## Format adapters
+
+### DOCX
+
+Use `DocxScrollViewer` where appropriate. DOCX is a paginated document and benefits from continuous scrolling, virtualization, progressive layout, text selection, find, hyperlinks, zoom, and page navigation.
+
+### XLSX
+
+Use `XlsxViewer`. XLSX is not paginated. Preserve worksheet tabs, grid scrolling, cell/range selection, zoom, find, hyperlinks, frozen panes, and workbook-specific behavior.
+
+Do not expose page-oriented methods as if they applied to XLSX.
+
+### PPTX
+
+Use `PptxScrollViewer` where appropriate. Preserve continuous slide scrolling, virtualization, slide navigation, zoom, find, text selection, hyperlinks, and any verified speaker-note capability.
+
+## Rendering mode
+
+The public mode is:
+
+```text
+mode="worker|main"
+```
+
+- Worker mode is the default.
+- `mode="worker"` means prefer worker rendering.
+- `mode="main"` explicitly requests main-thread rendering.
+- If the upstream engine must fall back to main mode for compatibility, the component may do so and should make the effective mode observable internally.
+- There is no `auto` mode.
+- There is no `worker-required` option in the initial release.
+
+Worker mode requires verification of `Worker`, `OffscreenCanvas`, `ImageBitmap`, worker asset paths, and DOCX shaping fallback behavior. `office-viewer` must not create a second rendering worker; it should use the worker lifecycle managed by `@silurus/ooxml`.
+
+## Source and loading rules
 
 ```ts
 type OfficeSource =
@@ -115,146 +155,52 @@ type OfficeSource =
   | Uint8Array
 ```
 
-The resolver must:
+`load(source)` is canonical. The `src` attribute is a convenience URL API:
 
-- Fetch URL sources.
-- Read `File` and `Blob` sources.
-- Preserve the filename where available.
-- Infer a format from explicit options or the filename.
-- Support `AbortSignal`.
-- Avoid unexpectedly mutating caller-owned buffers.
-- Preserve the original source for download where possible.
+- changing `src` loads the new URL;
+- `load(source)` does not need to reflect the source into `src`;
+- `reload()` reloads the last retained source and options;
+- `file-name` supplies metadata for sources without a filename;
+- `file-type` supplies an explicit format override.
 
-### Format detection
+Caller-owned buffers must not be detached or mutated unexpectedly. If transferables are used internally, copy the buffer before transferring it to a worker. Do not expose a transfer-ownership option initially.
 
-Determine the format in this order:
+The component owns and revokes only object URLs that it creates. It must retain enough source information to implement `downloadOriginal()` and reload direct binary sources.
 
-1. Explicit `file-type` attribute.
-2. Explicit `load()` option.
-3. Filename extension.
-4. Container signature validation where practical.
+## Format detection
 
-Unknown or unsupported formats must produce a clear error. Do not silently assume DOCX.
+Use conservative detection for the MVP:
 
-### Load controller
+1. `file-type` attribute.
+2. `format` option passed to `load()`.
+3. `File.name`, `file-name`, or URL pathname extension.
+4. Otherwise fail clearly for extensionless binary input.
 
-Loading must be race-safe:
+Do not add ZIP package-part inspection to the MVP solely for ambiguous extensionless files. Consider it later if real use cases justify the dependency and complexity.
+
+## Public API direction
+
+Initial attributes:
 
 ```text
-load(A) starts
-load(B) starts
-A finishes after B
-A must not replace B
+src
+file-name
+file-type
+mode="worker|main"
+theme
+zoom
+page
+slide
+sheet
+enable-text-selection
+enable-hyperlinks
+enable-download
+show-toolbar
 ```
 
-Use an `AbortController` and a load generation/token. A new load must cancel or invalidate the previous load and destroy the old viewer only when it is safe to do so.
+`locale` is intentionally excluded. Printing is intentionally excluded from the initial common API.
 
-## Format adapters
-
-Keep format-specific behavior behind adapters. Do not force DOCX, XLSX, and PPTX into an identical internal model.
-
-### DOCX
-
-Use the `@silurus/ooxml` continuous scroll viewer where appropriate.
-
-Expected capabilities:
-
-- Virtualized page scrolling.
-- Progressive layout where useful.
-- Worker rendering.
-- Zoom and fit controls.
-- Text selection.
-- Find.
-- Hyperlinks.
-- Page navigation.
-
-### XLSX
-
-Use the native workbook/sheet viewer.
-
-Expected capabilities:
-
-- Worksheet tabs.
-- Grid scrolling.
-- Cell and range selection.
-- Zoom.
-- Find.
-- Hyperlinks.
-- Frozen panes and workbook-specific behavior.
-
-Do not model XLSX as a paginated document.
-
-### PPTX
-
-Use the continuous slide viewer where appropriate.
-
-Expected capabilities:
-
-- Virtualized slide scrolling.
-- Slide navigation.
-- Zoom and fit controls.
-- Text selection.
-- Find.
-- Hyperlinks.
-- Optional speaker-note access if it fits the common API.
-
-## Adapter interface
-
-The exact interface must be finalized after reading the current `@silurus/ooxml` declarations and documentation.
-
-Initial direction:
-
-```ts
-interface ViewerAdapter {
-  readonly format: OfficeFormat
-  load(source: ResolvedSource, options?: ViewerLoadOptions): Promise<void>
-  destroy(): void
-  setScale?(scale: number): void
-  fitWidth?(): void
-  fitPage?(): void
-  findText?(query: string): void
-  clearFind?(): void
-  print?(): Promise<void>
-}
-```
-
-The adapter must not expose internal parser models as stable public API.
-
-## Public element API
-
-### Example
-
-```html
-<script type="module" src="./office-viewer-element.js"></script>
-
-<office-viewer
-  src="/documents/report.docx"
-  mode="worker"
-  style="height: 800px">
-</office-viewer>
-```
-
-### Initial attributes
-
-Only add attributes that can be implemented consistently:
-
-- `src`
-- `file-name`
-- `file-type`
-- `mode="main|worker"`
-- `theme="automatic|light|dark"`
-- `locale`
-- `zoom`
-- `page`
-- `slide`
-- `sheet`
-- `enable-text-selection`
-- `enable-hyperlinks`
-- `enable-download`
-- `enable-print`
-- `show-toolbar`
-
-### Initial methods
+Initial methods:
 
 ```ts
 load(source: OfficeSource, options?: OfficeViewerLoadOptions): Promise<void>
@@ -264,69 +210,71 @@ fitWidth(): void
 fitPage(): void
 findText(query: string): void
 clearFind(): void
-print(): Promise<void>
-download(): Promise<void>
+downloadOriginal(): Promise<void>
 destroy(): void
 ```
 
-Format-specific operations should be added only when their semantics are clear. For example, `goToSheet()` is meaningful for XLSX but not DOCX.
+`downloadOriginal()` downloads the original source bytes only. It does not export PDF, images, or modified Office documents.
 
-### Events
+The exact `wasmUrl` type must match the current upstream declarations. Expose `wasmUrl` only if verified. Do not expose `workerUrl` in the initial release.
 
 Initial events:
 
-- `loadstart`
-- `progress`
-- `ready`
-- `loaderror`
-- `pagechange`
-- `slidechange`
-- `sheetchange`
-- `zoomchange`
-- `destroy`
-
-Event details should be typed, small, and serializable.
-
-## Worker mode
-
-Prefer worker rendering by default when supported:
-
 ```text
-mode="worker"
+loadstart
+progress
+ready
+loaderror
+pagechange
+slidechange
+sheetchange
+zoomchange
+destroy
 ```
 
-Verify the current `@silurus/ooxml` behavior before implementing defaults. Worker mode requires attention to:
+Events must be typed, small, and serializable. Format-specific operations remain adapter-specific unless their semantics are truly common.
 
-- `Worker` support.
-- `OffscreenCanvas` support.
-- `ImageBitmap` ownership and cleanup.
-- Worker and WASM asset URLs.
-- CSP and static hosting.
-- DOCX shaping fallback to main mode.
-- Limitations on custom renderer objects.
+## Lifecycle
 
-Recommended behavior:
+Use an explicit state machine:
 
-- If worker mode is requested and supported, use it.
-- If worker mode is preferred but unavailable, fall back to main mode.
-- If a future `worker-required` option is added, fail clearly when unsupported.
-- Expose the effective mode so consumers can observe fallbacks.
+```text
+idle → loading → ready
+                 ↘ error
+
+ready/error → loading on new load
+any temporary state → detached on disconnect
+any state → destroyed on permanent destroy()
+```
+
+Each load gets a generation token and an `AbortController`. A stale asynchronous result must never replace a newer load.
+
+`disconnectedCallback()` temporarily releases the active upstream viewer and retains the source/configuration needed for reconnection. Reconnection recreates and reloads when appropriate. `destroy()` permanently aborts work, releases the upstream viewer and render resources, revokes component-owned URLs, clears active resources, and requires a new explicit `load()` call.
 
 ## Optional modules
 
-Keep optional renderers out of the default application graph:
+Do not enable optional renderers by default:
 
-- MathJax equations.
-- ChartEx.
-- 3-D charts.
-- Region Maps.
-- TIFF decoding.
+- MathJax
+- ChartEx
+- 3-D charts
+- Region Maps
+- TIFF decoding
 
-Do not enable or bundle these automatically in the MVP. Add explicit configuration only after verifying the current `@silurus/ooxml` injection types and worker behavior.
+Add public configuration only after verifying upstream types and worker-mode behavior. Optional assets must not be fetched for documents that do not need them.
 
-## Styling
+## Styling and accessibility
 
-Use an open Shadow DOM, consistent with `pdfjs-viewer-element`.
+Use an open Shadow DOM, but provide only shell styling where it has clear value:
+
+- viewer background/desk;
+- page or slide gaps;
+- shadows;
+- status UI;
+- optional toolbar;
+- XLSX shell elements where supported.
+
+Do not imply that authored document content can be themed. `locale` is not part of the MVP.
 
 The host must have a bounded height:
 
@@ -337,68 +285,29 @@ office-viewer {
 }
 ```
 
-Expose CSS custom properties for integration:
+Required accessibility work:
 
-```css
---office-viewer-background
---office-viewer-page-gap
---office-viewer-page-shadow
---office-viewer-accent-color
-```
-
-Provide a restrained Paper & Ink-inspired default theme without depending on PDF.js styles.
-
-## Toolbar
-
-The first technical spike should focus on rendering, not a complete toolbar.
-
-Later, add an optional toolbar with common actions:
-
-- Zoom out/in.
-- Zoom level.
-- Fit width/page.
-- Previous/next page or slide.
-- Find.
-- Print.
-- Download.
-
-XLSX controls must remain sheet-aware and must not pretend that the workbook is a paginated document.
-
-## Accessibility
-
-Required for the MVP:
-
-- `aria-busy` while loading.
-- Accessible loading status.
-- Accessible error status.
-- Keyboard navigation where supported.
-- Focus-visible styles.
-- A labelled viewer region.
-- A clear fallback if Canvas or worker rendering is unavailable.
-
-Canvas output must not be described as fully accessible by itself. Integrate the underlying library's documented text-selection overlays and test them separately.
+- `aria-busy` while loading;
+- accessible loading and error status;
+- labelled viewer region;
+- keyboard navigation where supported;
+- focus-visible styles;
+- clear fallback when Canvas or worker rendering is unavailable.
 
 ## Bundle and asset strategy
 
-Measure rather than assume. Compare:
+Measure, do not assume. Compare:
 
-- Combined all-format import.
-- DOCX-only import.
-- XLSX-only import.
-- PPTX-only import.
-- Dynamic adapter imports.
+- combined all-format import;
+- DOCX-only, XLSX-only, and PPTX-only imports;
+- dynamic adapter imports;
+- JavaScript and WASM transfer sizes;
+- worker assets;
+- first visible render time;
+- memory usage;
+- warm-cache behavior.
 
-Record:
-
-- JavaScript size.
-- WASM size per format.
-- First-load requests.
-- Time to first render.
-- Memory usage.
-- Repeat-load behavior.
-- Optional module cost.
-
-Potential future entry points:
+Potential subpath exports remain deferred:
 
 ```text
 @missing-elements/office-viewer
@@ -407,43 +316,50 @@ Potential future entry points:
 @missing-elements/office-viewer/pptx
 ```
 
-Do not finalize these exports until the technical spike confirms that they improve real application graphs and do not create unreliable WASM/worker asset handling.
+Use `@silurus/ooxml` as a normal dependency initially. Decide on dynamic imports and subpath exports only after verifying real bundle graphs and asset reliability.
 
-## Testing plan
+## Testing
+
+Use Vitest and WebdriverIO as the primary test stack.
 
 ### Unit tests
 
-- Source normalization.
-- Filename inference.
-- Format detection.
-- Container validation.
-- Attribute parsing.
-- Abort behavior.
-- Stale-load protection.
-- Event payloads.
-- Unsupported formats.
-- Error mapping.
-- Cleanup and destruction.
+- source normalization;
+- filename and extension inference;
+- format detection;
+- attribute parsing;
+- mode selection;
+- abort and stale-load handling;
+- error normalization;
+- source ownership;
+- event payloads;
+- cleanup.
 
 ### Browser tests
 
-- Load DOCX, XLSX, and PPTX from URL.
-- Load `File`, `Blob`, `ArrayBuffer`, and `Uint8Array` sources.
-- Worker mode.
-- Main mode.
-- Worker fallback.
-- Destroy and reconnect.
-- Reload a different document.
-- Resize.
-- Zoom.
-- Find.
-- Hyperlinks.
-- Theme changes.
-- Loading and error states.
+- load each format from URL, File, Blob, ArrayBuffer, and Uint8Array;
+- worker mode and main mode;
+- verified worker fallback;
+- reload and replacement;
+- disconnect/reconnect;
+- permanent destroy;
+- resize and refit;
+- zoom and navigation;
+- find and hyperlinks;
+- theme/shell behavior;
+- original download;
+- malformed, encrypted, legacy, and unsupported input.
+
+### Asset tests
+
+- production WASM and worker paths;
+- non-root static deployment;
+- explicit `wasmUrl` when supported;
+- no accidental inline WASM;
+- no development-only worker path;
+- optional modules absent by default.
 
 ### Visual fixtures
-
-Use small representative fixtures:
 
 ```text
 simple.docx
@@ -458,126 +374,69 @@ shapes.pptx
 images.pptx
 ```
 
-Visual tests should verify the component shell and lifecycle as well as the underlying rendering output.
-
-## Demo
-
-Create a framework-neutral demo with:
-
-- File picker.
-- Drag-and-drop.
-- URL loading.
-- Format display.
-- Loading progress.
-- Error display.
-- Zoom controls.
-- Find.
-- Theme switching.
-- Original-file download.
-
-Framework examples for React, Vue, and Svelte can be added after the core custom element is stable.
-
-## Documentation
-
-Create:
-
-```text
-README.md
-docs/getting-started.md
-docs/api.md
-docs/loading-sources.md
-docs/worker-mode.md
-docs/bundle-size.md
-docs/accessibility.md
-docs/format-support.md
-docs/troubleshooting.md
-```
-
-Documentation must clearly state:
-
-- This is a read-only viewer.
-- PDF is not supported by this package.
-- Processing occurs locally in the browser.
-- Supported formats are DOCX, XLSX, and PPTX.
-- WASM assets are required.
-- Worker mode has browser requirements and possible fallbacks.
-- The host must provide a bounded height.
-- Compatibility and limitations are inherited from `@silurus/ooxml`.
-
 ## Milestones
 
 ### Milestone 0 — Architecture spike
 
-- Study the complete `@silurus/ooxml` documentation and public declarations.
-- Inspect DOCX, XLSX, and PPTX examples.
-- Confirm source and lifecycle semantics.
-- Confirm worker mode and fallback behavior.
-- Confirm WASM and worker asset handling.
-- Measure format-specific bundle sizes.
-- Load one real document of each format in a plain browser demo.
-- Record pitfalls and decisions in an architecture note.
+- Complete the upstream API study.
+- Create `docs/ooxml-integration-notes.md`.
+- Build a raw DOCX/XLSX/PPTX harness.
+- Verify worker mode and main mode in production builds.
+- Verify WASM and worker asset paths.
+- Test `File` and URL sources.
+- Measure per-format bundle/runtime costs.
+- Record all upstream pitfalls.
 
-No polished custom element is required in this milestone.
+Do not finalize the custom-element API before this milestone is complete.
 
 ### Milestone 1 — Minimal DOCX component
 
-- Create the package skeleton.
-- Implement Shadow DOM and bounded viewer container.
-- Add source loading.
-- Add DOCX adapter.
+- Create package skeleton.
+- Implement Shadow DOM and bounded container.
+- Implement source loading and lifecycle state.
+- Add DOCX adapter using worker mode by default.
 - Add loading/error states.
-- Add worker mode.
-- Add destruction and cleanup.
-- Add the first browser tests.
+- Add disconnect/reconnect and destroy behavior.
+- Add initial browser tests.
 
 ### Milestone 2 — XLSX and PPTX
 
-- Add XLSX adapter.
-- Add PPTX adapter.
-- Add format detection.
-- Add common events.
-- Add format-specific navigation where justified.
-- Add `File`, `Blob`, and binary sources.
+- Add XLSX and PPTX adapters.
+- Add conservative format detection.
+- Add binary source types.
+- Add common events and format-specific navigation.
 
-### Milestone 3 — Lifecycle hardening
+### Milestone 3 — Lifecycle and asset hardening
 
-- Add abortable loads.
-- Add stale-load protection.
-- Add reconnect handling.
-- Add resize handling.
-- Add effective-mode reporting.
-- Add structured error mapping.
-- Add asset-path and CSP tests.
+- Add abortable loads and stale-load protection.
+- Verify source ownership and buffer-copy behavior.
+- Verify worker fallback.
+- Verify WASM override if supported.
+- Test static hosting, Vite, plain modules, and supported framework bundlers.
 
-### Milestone 4 — Common interaction API
+### Milestone 4 — Verified interactions
 
-- Add zoom.
-- Add fit width/page.
-- Add find.
-- Add hyperlinks.
+- Add zoom and fit.
+- Add find and hyperlinks.
 - Add page/slide/sheet events.
-- Add original-file download.
-- Add print where supported and verified.
+- Add `downloadOriginal()`.
+- Do not add common printing until separately verified.
 
 ### Milestone 5 — UX and accessibility
 
-- Add optional toolbar.
-- Add theme support.
-- Add keyboard navigation.
-- Improve loading and error announcements.
-- Add drag-and-drop demo.
-- Add mobile layout.
+- Add minimal shell styling.
+- Add optional toolbar only if it does not distort format-specific behavior.
+- Add keyboard and status accessibility.
+- Add drag-and-drop and mobile demo behavior.
 
 ### Milestone 6 — Production release
 
-- Finalize package exports.
-- Generate and verify declarations.
-- Complete browser matrix.
+- Finalize exports and declarations.
+- Complete browser and visual tests.
 - Publish bundle-size measurements.
-- Complete visual regression tests.
-- Complete documentation.
+- Complete documentation and troubleshooting guidance.
 - Add changelog and release workflow.
-- Verify CDN and plain-module usage.
+- Verify CDN/plain-module usage.
 
 ## Definition of success
 
@@ -593,18 +452,10 @@ A user can write:
 </office-viewer>
 ```
 
-and receive a private, browser-only, read-only Office viewer with:
+and receive a private, browser-rendered, read-only Office viewer with no server, upload service, ONLYOFFICE runtime, editor UI, PDF.js dependency, or manual extraction.
 
-- no server;
-- no upload;
-- no ONLYOFFICE runtime;
-- no editor UI;
-- no PDF.js dependency;
-- no manual extraction;
-- clear loading and failure states;
-- stable Web Component lifecycle;
-- good DOCX, XLSX, and PPTX rendering.
+For local `File`, `Blob`, and binary sources, the component processes bytes locally and does not upload them. URL sources are fetched from the URL supplied by the consumer.
 
 ## First implementation rule
 
-Do not lock the public API before completing the architecture spike. Carefully verify the current `@silurus/ooxml` documentation, declarations, examples, worker behavior, asset handling, and bundle measurements first.
+Carefully verify the current `@silurus/ooxml` documentation, declarations, examples, worker behavior, asset handling, and bundle measurements before locking the stable public API.
