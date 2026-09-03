@@ -1,0 +1,30 @@
+{
+  "name": "@missing-elements/office-viewer",
+  "version": "0.0.0-spike",
+  "private": true,
+  "description": "Architecture spike for browser-based OOXML viewing with @silurus/ooxml.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "pnpm typecheck && vite build",
+    "test": "pnpm test:unit && pnpm test:browser",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "test:build": "vitest run --config vitest.build.config.ts",
+    "preview": "vite preview --host 127.0.0.1 --port 4173"
+  },
+  "dependencies": {
+    "@silurus/ooxml": "0.85.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "@vitest/browser": "^4.1.11",
+    "@vitest/browser-webdriverio": "^4.1.11",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11",
+    "webdriverio": "^9.31.5"
+  }
+}
