@@ -13,14 +13,15 @@ const modeSelect = document.querySelector<HTMLSelectElement>('#mode')
 const urlInput = document.querySelector<HTMLInputElement>('#url')
 const fileInput = document.querySelector<HTMLInputElement>('#file')
 const wasmUrlInput = document.querySelector<HTMLInputElement>('#wasmUrl')
+const targetIndexInput = document.querySelector<HTMLInputElement>('#target-index')
 const status = document.querySelector<HTMLElement>('#status')
 const summary = document.querySelector<HTMLElement>('#summary')
 
-if (!viewer || !formatSelect || !modeSelect || !urlInput || !fileInput || !wasmUrlInput || !status || !summary) {
+if (!viewer || !formatSelect || !modeSelect || !urlInput || !fileInput || !wasmUrlInput || !targetIndexInput || !status || !summary) {
   throw new Error('Demo UI is missing required elements.')
 }
 
-const ui = { viewer, formatSelect, modeSelect, urlInput, fileInput, wasmUrlInput, status, summary }
+const ui = { viewer, formatSelect, modeSelect, urlInput, fileInput, wasmUrlInput, targetIndexInput, status, summary }
 const viewerElement = createViewerElement(ui)
 
 const currentFormat = (): OfficeFormat => ui.formatSelect.value as OfficeFormat
@@ -58,6 +59,14 @@ async function runLoad(source: OfficeSource, options = buildOptions()): Promise<
 
 function syncSampleUrl(): void {
   ui.urlInput.value = SAMPLE_FIXTURES[currentFormat()]
+}
+
+if (viewerElement) {
+  for (const eventName of ['progress', 'pagechange', 'sheetchange', 'slidechange']) {
+    viewerElement.addEventListener(eventName, () => {
+      refreshSummary()
+    })
+  }
 }
 
 ui.formatSelect.addEventListener('change', syncSampleUrl)
@@ -116,6 +125,31 @@ document.querySelector('#destroy')?.addEventListener('click', () => {
   ui.status.textContent = 'Destroyed active viewer.'
   refreshSummary()
 })
+document.querySelector('#go-index')?.addEventListener('click', () => {
+  if (!viewerElement) {
+    ui.status.textContent = 'Viewer failed to initialize. Check console for details.'
+    return
+  }
+
+  const indexValue = Number(ui.targetIndexInput.value)
+  if (!Number.isFinite(indexValue) || indexValue < 0) {
+    ui.status.textContent = 'Enter a valid non-negative index.'
+    return
+  }
+
+  const normalizedIndex = Math.trunc(indexValue)
+  const format = currentFormat()
+  const moved = format === 'docx'
+    ? viewerElement.goToPage(normalizedIndex)
+    : format === 'xlsx'
+      ? viewerElement.goToSheet(normalizedIndex)
+      : viewerElement.goToSlide(normalizedIndex)
+
+  ui.status.textContent = moved
+    ? `Requested ${format.toUpperCase()} index ${normalizedIndex}.`
+    : `Navigation is not available for the current ${format.toUpperCase()} viewer instance.`
+  refreshSummary()
+})
 
 syncSampleUrl()
 refreshSummary()
@@ -125,7 +159,14 @@ function createViewerElement(model: typeof ui): OfficeViewerElement | null {
     defineOfficeViewerElement()
     const candidate = document.createElement('office-viewer') as Partial<OfficeViewerElement>
 
-    if (typeof candidate.load !== 'function' || typeof candidate.getSummary !== 'function' || typeof candidate.destroy !== 'function') {
+    if (
+      typeof candidate.load !== 'function'
+      || typeof candidate.getSummary !== 'function'
+      || typeof candidate.destroy !== 'function'
+      || typeof candidate.goToPage !== 'function'
+      || typeof candidate.goToSheet !== 'function'
+      || typeof candidate.goToSlide !== 'function'
+    ) {
       throw new Error('Custom element upgraded to an unexpected shape.')
     }
 

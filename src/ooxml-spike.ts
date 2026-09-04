@@ -1,3 +1,5 @@
+import { getViewerAdapter, VIEWER_KIND_BY_FORMAT } from './viewer-adapter'
+
 export type OfficeFormat = 'docx' | 'xlsx' | 'pptx'
 export type OfficeViewerMode = 'worker' | 'main'
 export type OfficeSource = string | URL | File | Blob | ArrayBuffer | Uint8Array
@@ -34,7 +36,16 @@ export interface OfficeSpikeRunSummary {
   diagnostics: string[]
 }
 
-interface RetainedLoad {
+export interface OfficeSpikeSummaryUpdate {
+  currentIndex?: number
+  totalCount?: number
+  layoutComplete?: boolean
+  sheetNames?: string[]
+}
+
+export type OfficeSpikeSummaryListener = (summary: OfficeSpikeRunSummary) => void
+
+export interface RetainedLoad {
   readonly source: string | ArrayBuffer
   readonly sourceKind: OfficeSourceKind
   readonly format: OfficeFormat
@@ -42,11 +53,11 @@ interface RetainedLoad {
   readonly options: OfficeSpikeLoadOptions
 }
 
-type ViewerInstance = {
+export interface ViewerInstance {
   destroy(): void
 }
 
-type EngineInstance = {
+export interface EngineInstance {
   readonly mode: OfficeViewerMode
   destroy(): void
 }
@@ -150,8 +161,10 @@ export class OoxmlIntegrationSpike {
   private retainedLoad: RetainedLoad | null = null
   private activeViewer: ViewerInstance | null = null
   private activeEngine: EngineInstance | null = null
+  private activeFormat: OfficeFormat | null = null
   private generation = 0
   private pendingState: PendingState | null = null
+  private readonly summaryListeners = new Set<OfficeSpikeSummaryListener>()
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -159,6 +172,13 @@ export class OoxmlIntegrationSpike {
 
   getSummary(): OfficeSpikeRunSummary | null {
     return this.pendingState?.summary ?? null
+  }
+
+  subscribeSummary(listener: OfficeSpikeSummaryListener): () => void {
+    this.summaryListeners.add(listener)
+    return () => {
+      this.summaryListeners.delete(listener)
+    }
   }
 
   async load(source: OfficeSource, options: OfficeSpikeLoadOptions = {}): Promise<OfficeSpikeRunSummary> {
@@ -174,7 +194,7 @@ export class OoxmlIntegrationSpike {
       startedAt: performance.now(),
       summary: {
         format: retainedLoad.format,
-        viewerKind: retainedLoad.format === 'docx' ? 'DocxScrollViewer' : retainedLoad.format === 'xlsx' ? 'XlsxViewer' : 'PptxScrollViewer',
+        viewerKind: VIEWER_KIND_BY_FORMAT[retainedLoad.format],
         sourceKind: retainedLoad.sourceKind,
         fileName: retainedLoad.fileName,
         requestedMode: retainedLoad.options.mode ?? 'worker',
@@ -183,17 +203,22 @@ export class OoxmlIntegrationSpike {
         diagnostics: []
       }
     }
+    this.notifySummary()
 
     if (retainedLoad.sourceKind === 'file' || retainedLoad.sourceKind === 'blob' || retainedLoad.sourceKind === 'uint8array') {
       this.pendingState.summary.diagnostics.push('Normalized File, Blob, and Uint8Array inputs to ArrayBuffer because upstream declarations only type load(source) as string | ArrayBuffer.')
     }
 
     try {
-      const loaded = retainedLoad.format === 'docx'
-        ? await this.loadDocx(retainedLoad, generation)
-        : retainedLoad.format === 'xlsx'
-          ? await this.loadXlsx(retainedLoad, generation)
-          : await this.loadPptx(retainedLoad, generation)
+      const adapter = getViewerAdapter(retainedLoad.format)
+      const loaded = await adapter.load(retainedLoad, this.container, {
+        onSummaryUpdate: (update) => {
+          this.applySummaryUpdate(generation, update)
+        },
+        onError: (error) => {
+          this.applyError(generation, error)
+        }
+      })
 
       if (!this.isCurrent(generation)) {
         loaded.viewer.destroy()
@@ -203,13 +228,16 @@ export class OoxmlIntegrationSpike {
 
       this.activeViewer = loaded.viewer
       this.activeEngine = loaded.engine
+      this.activeFormat = retainedLoad.format
       this.pendingState.summary.effectiveMode = loaded.engine.mode
       this.finishVisibleTick()
+      this.notifySummary()
       return this.pendingState.summary
     } catch (error) {
       if (this.isCurrent(generation)) {
         this.pendingState.summary.lastError = toOfficeSpikeError(error)
         this.pendingState.summary.diagnostics.push(formatErrorDiagnostic(error))
+        this.notifySummary()
       }
 
       throw error
@@ -235,11 +263,24 @@ export class OoxmlIntegrationSpike {
     this.destroyActive()
   }
 
+  goToPage(pageIndex: number): boolean {
+    return this.navigateTo('docx', pageIndex)
+  }
+
+  goToSlide(slideIndex: number): boolean {
+    return this.navigateTo('pptx', slideIndex)
+  }
+
+  goToSheet(sheetIndex: number): boolean {
+    return this.navigateTo('xlsx', sheetIndex)
+  }
+
   private destroyActive(): void {
     this.activeViewer?.destroy()
     this.activeEngine?.destroy()
     this.activeViewer = null
     this.activeEngine = null
+    this.activeFormat = null
     this.container.replaceChildren()
   }
 
@@ -247,16 +288,40 @@ export class OoxmlIntegrationSpike {
     return this.pendingState?.summary.generation === generation
   }
 
-  private markVisible(generation: number, currentIndex: number, totalCount?: number, layoutComplete?: boolean): void {
+  private applySummaryUpdate(generation: number, update: OfficeSpikeSummaryUpdate): void {
     if (!this.isCurrent(generation) || !this.pendingState) {
       return
     }
 
     const { summary } = this.pendingState
-    summary.currentIndex = currentIndex
-    summary.totalCount = totalCount
-    summary.layoutComplete = layoutComplete
+    if (typeof update.currentIndex === 'number') {
+      summary.currentIndex = update.currentIndex
+    }
+
+    if (typeof update.totalCount === 'number') {
+      summary.totalCount = update.totalCount
+    }
+
+    if (typeof update.layoutComplete === 'boolean') {
+      summary.layoutComplete = update.layoutComplete
+    }
+
+    if (update.sheetNames) {
+      summary.sheetNames = [...update.sheetNames]
+    }
+
     this.finishVisibleTick()
+    this.notifySummary()
+  }
+
+  private applyError(generation: number, error: unknown): void {
+    if (!this.isCurrent(generation) || !this.pendingState) {
+      return
+    }
+
+    this.pendingState.summary.lastError = toOfficeSpikeError(error)
+    this.pendingState.summary.diagnostics.push(formatErrorDiagnostic(error))
+    this.notifySummary()
   }
 
   private finishVisibleTick(): void {
@@ -269,86 +334,24 @@ export class OoxmlIntegrationSpike {
     this.pendingState.summary.loadCompletedMs = elapsed
   }
 
-  private async loadDocx(retainedLoad: RetainedLoad, generation: number): Promise<{ engine: EngineInstance, viewer: ViewerInstance }> {
-    const { DocxDocument, DocxScrollViewer } = await import('@silurus/ooxml/docx')
-    const engine = await DocxDocument.load(cloneRetainedSource(retainedLoad), {
-      mode: retainedLoad.options.mode ?? 'worker',
-      wasmUrl: retainedLoad.options.wasmUrl,
-      progressiveLayout: true
-    })
+  private navigateTo(format: OfficeFormat, targetIndex: number): boolean {
+    if (!this.activeViewer || this.activeFormat !== format || !Number.isFinite(targetIndex)) {
+      return false
+    }
 
-    const viewer = DocxScrollViewer.fromDocument(this.container, engine, {
-      enableHyperlinks: true,
-      enableTextSelection: true,
-      onVisiblePageChange: (topIndex, total, layoutComplete) => {
-        this.markVisible(generation, topIndex, total, layoutComplete)
-      },
-      onError: (error) => {
-        if (this.isCurrent(generation) && this.pendingState) {
-          this.pendingState.summary.lastError = toOfficeSpikeError(error)
-          this.pendingState.summary.diagnostics.push(formatErrorDiagnostic(error))
-        }
-      }
-    })
-
-    this.markVisible(generation, viewer.topVisiblePage, viewer.pageCount, viewer.layoutComplete)
-    return { engine, viewer }
+    const adapter = getViewerAdapter(format)
+    return adapter.navigate(this.activeViewer, targetIndex)
   }
 
-  private async loadXlsx(retainedLoad: RetainedLoad, generation: number): Promise<{ engine: EngineInstance, viewer: ViewerInstance }> {
-    const { XlsxViewer, XlsxWorkbook } = await import('@silurus/ooxml/xlsx')
-    const engine = await XlsxWorkbook.load(cloneRetainedSource(retainedLoad), {
-      mode: retainedLoad.options.mode ?? 'worker',
-      wasmUrl: retainedLoad.options.wasmUrl
-    })
+  private notifySummary(): void {
+    if (!this.pendingState) {
+      return
+    }
 
-    const viewer = XlsxViewer.fromWorkbook(this.container, engine, {
-      enableHyperlinks: true,
-      onReady: (sheetNames) => {
-        if (this.isCurrent(generation) && this.pendingState) {
-          this.pendingState.summary.sheetNames = [...sheetNames]
-          this.markVisible(generation, 0, sheetNames.length, true)
-        }
-      },
-      onSheetChange: (index, total) => {
-        this.markVisible(generation, index, total, true)
-      },
-      onError: (error) => {
-        if (this.isCurrent(generation) && this.pendingState) {
-          this.pendingState.summary.lastError = toOfficeSpikeError(error)
-          this.pendingState.summary.diagnostics.push(formatErrorDiagnostic(error))
-        }
-      }
-    })
-    this.markVisible(generation, viewer.sheetIndex, viewer.sheetCount, true)
-    this.pendingState!.summary.sheetNames = [...viewer.sheetNames]
-    return { engine, viewer }
-  }
-
-  private async loadPptx(retainedLoad: RetainedLoad, generation: number): Promise<{ engine: EngineInstance, viewer: ViewerInstance }> {
-    const { PptxPresentation, PptxScrollViewer } = await import('@silurus/ooxml/pptx')
-    const engine = await PptxPresentation.load(cloneRetainedSource(retainedLoad), {
-      mode: retainedLoad.options.mode ?? 'worker',
-      wasmUrl: retainedLoad.options.wasmUrl,
-      progressiveLayout: true
-    })
-
-    const viewer = PptxScrollViewer.fromPresentation(this.container, engine, {
-      enableHyperlinks: true,
-      enableTextSelection: true,
-      onVisibleSlideChange: (topIndex, total, layoutComplete) => {
-        this.markVisible(generation, topIndex, total, layoutComplete)
-      },
-      onError: (error) => {
-        if (this.isCurrent(generation) && this.pendingState) {
-          this.pendingState.summary.lastError = toOfficeSpikeError(error)
-          this.pendingState.summary.diagnostics.push(formatErrorDiagnostic(error))
-        }
-      }
-    })
-
-    this.markVisible(generation, viewer.topVisibleSlide, viewer.slideCount, viewer.layoutComplete)
-    return { engine, viewer }
+    const summary = cloneSummary(this.pendingState.summary)
+    for (const listener of this.summaryListeners) {
+      listener(summary)
+    }
   }
 }
 
@@ -362,12 +365,17 @@ function inferFileNameFromUrl(urlString: string): string | undefined {
   }
 }
 
-function cloneRetainedSource(retainedLoad: RetainedLoad): string | ArrayBuffer {
-  return typeof retainedLoad.source === 'string' ? retainedLoad.source : copyArrayBuffer(retainedLoad.source)
-}
-
 function copyArrayBuffer(buffer: ArrayBuffer): ArrayBuffer {
   return buffer.slice(0)
+}
+
+function cloneSummary(summary: OfficeSpikeRunSummary): OfficeSpikeRunSummary {
+  return {
+    ...summary,
+    diagnostics: [...summary.diagnostics],
+    sheetNames: summary.sheetNames ? [...summary.sheetNames] : undefined,
+    lastError: summary.lastError ? { ...summary.lastError } : undefined
+  }
 }
 
 function toOfficeSpikeError(error: unknown): OfficeSpikeError {

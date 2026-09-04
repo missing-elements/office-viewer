@@ -7,6 +7,7 @@ import {
   type OfficeSource,
   type OfficeViewerMode
 } from './ooxml-spike'
+import { CHANGE_EVENT_BY_FORMAT } from './viewer-adapter'
 
 export interface OfficeViewerLoadOptions extends OfficeSpikeLoadOptions {
   signal?: AbortSignal
@@ -19,6 +20,19 @@ export interface OfficeViewerReadyEventDetail {
 export interface OfficeViewerLoadErrorEventDetail {
   error: OfficeSpikeError
   summary: OfficeSpikeRunSummary | null
+}
+
+export interface OfficeViewerProgressEventDetail {
+  summary: OfficeSpikeRunSummary
+}
+
+export interface OfficeViewerIndexChangeEventDetail {
+  format: OfficeFormat
+  index: number
+  totalCount?: number
+  layoutComplete?: boolean
+  sheetNames?: string[]
+  summary: OfficeSpikeRunSummary
 }
 
 export const OFFICE_VIEWER_TAG_NAME = 'office-viewer'
@@ -43,6 +57,8 @@ export class OfficeViewerElement extends HTMLElement {
   private status: HTMLParagraphElement | null = null
   private viewport: HTMLDivElement | null = null
   private harness: OoxmlIntegrationSpike | null = null
+  private unsubscribeSummary: (() => void) | null = null
+  private lastProgressSignature: string | null = null
   private requestGeneration = 0
   private activeRequestController: AbortController | null = null
 
@@ -191,6 +207,18 @@ export class OfficeViewerElement extends HTMLElement {
     return this.harness?.getSummary() ?? null
   }
 
+  goToPage(pageIndex: number): boolean {
+    return this.getHarness().goToPage(pageIndex)
+  }
+
+  goToSlide(slideIndex: number): boolean {
+    return this.getHarness().goToSlide(slideIndex)
+  }
+
+  goToSheet(sheetIndex: number): boolean {
+    return this.getHarness().goToSheet(sheetIndex)
+  }
+
   destroy(): void {
     this.cancelActiveRequest(createAbortError('Viewer destroyed.'))
     this.requestGeneration += 1
@@ -299,12 +327,17 @@ export class OfficeViewerElement extends HTMLElement {
 
     this.status = status
     this.viewport = viewport
+    this.unsubscribeSummary?.()
     this.harness = new OoxmlIntegrationSpike(viewport)
+    this.unsubscribeSummary = this.harness.subscribeSummary((summary) => {
+      this.handleSummary(summary)
+    })
     this.updateStatus('Idle', true)
   }
 
   private beginRequest(externalSignal?: AbortSignal): ActiveRequest {
     const id = ++this.requestGeneration
+    this.lastProgressSignature = null
     this.cancelActiveRequest(createAbortError('Superseded by a newer request.'))
 
     const controller = new AbortController()
@@ -371,6 +404,31 @@ export class OfficeViewerElement extends HTMLElement {
     }
 
     return this.harness
+  }
+
+  private handleSummary(summary: OfficeSpikeRunSummary): void {
+    const signature = summarySignature(summary)
+    if (signature === this.lastProgressSignature) {
+      return
+    }
+
+    this.lastProgressSignature = signature
+    this.emit<OfficeViewerProgressEventDetail>('progress', {
+      summary
+    })
+
+    if (typeof summary.currentIndex !== 'number') {
+      return
+    }
+
+    this.emit<OfficeViewerIndexChangeEventDetail>(CHANGE_EVENT_BY_FORMAT[summary.format], {
+      format: summary.format,
+      index: summary.currentIndex,
+      totalCount: summary.totalCount,
+      layoutComplete: summary.layoutComplete,
+      sheetNames: summary.sheetNames ? [...summary.sheetNames] : undefined,
+      summary
+    })
   }
 }
 
@@ -452,4 +510,17 @@ function toAbortError(reason: unknown): Error {
   }
 
   return createAbortError('The operation was aborted.')
+}
+
+function summarySignature(summary: OfficeSpikeRunSummary): string {
+  const sheetNames = summary.sheetNames?.join(',') ?? ''
+  return [
+    summary.generation,
+    summary.format,
+    summary.currentIndex ?? -1,
+    summary.totalCount ?? -1,
+    summary.layoutComplete ? 1 : 0,
+    sheetNames,
+    summary.lastError?.message ?? ''
+  ].join('|')
 }

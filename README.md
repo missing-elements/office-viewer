@@ -36,8 +36,9 @@ Current wrapper behavior:
 - delegates loading/reload/destroy to the existing `OoxmlIntegrationSpike`
 - supports `src`, `file-name`, `file-type`, `mode`, and `wasm-url` attributes
 - exposes `load()`, `reload()`, `destroy()`, and `getSummary()`
+- exposes format-specific navigation methods: `goToPage()`, `goToSheet()`, `goToSlide()`
 - supports request cancellation via `load(source, { signal })` using `AbortSignal`
-- dispatches `loadstart`, `ready`, `loaderror`, and `destroy` events
+- dispatches `loadstart`, `progress`, `ready`, `loaderror`, `pagechange`, `sheetchange`, `slidechange`, and `destroy` events
 
 This surface is intentionally provisional while the final public API is being validated.
 

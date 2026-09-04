@@ -79,9 +79,21 @@ describe('browser integration spike', () => {
     element.style.height = '100%'
     container.append(element)
 
+    const progressEvents: Event[] = []
+    const pageChangeEvents: Event[] = []
+    element.addEventListener('progress', (event) => {
+      progressEvents.push(event)
+    })
+    element.addEventListener('pagechange', (event) => {
+      pageChangeEvents.push(event)
+    })
+
     const result = await element.load(SAMPLE_FIXTURES.docx, { format: 'docx' })
     expect(result.format).toBe('docx')
     expect(element.getSummary()?.format).toBe('docx')
+    expect(progressEvents.length).toBeGreaterThan(0)
+    expect(pageChangeEvents.length).toBeGreaterThan(0)
+    expect(typeof element.goToPage(0)).toBe('boolean')
 
     const viewport = (element.shadowRoot ?? element).querySelector<HTMLElement>('[part="viewport"]')
     expect(viewport).toBeTruthy()
@@ -89,6 +101,34 @@ describe('browser integration spike', () => {
 
     element.destroy()
     expect(viewport?.childElementCount ?? 0).toBe(0)
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('emits sheet and slide change events for xlsx and pptx loads', async () => {
+    defineOfficeViewerElement()
+
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    element.style.width = '100%'
+    element.style.height = '100%'
+    container.append(element)
+
+    let sheetChangeCount = 0
+    let slideChangeCount = 0
+    element.addEventListener('sheetchange', () => {
+      sheetChangeCount += 1
+    })
+    element.addEventListener('slidechange', () => {
+      slideChangeCount += 1
+    })
+
+    const xlsx = await element.load(SAMPLE_FIXTURES.xlsx, { format: 'xlsx' })
+    expect(xlsx.format).toBe('xlsx')
+    expect(sheetChangeCount).toBeGreaterThan(0)
+    expect(typeof element.goToSheet(0)).toBe('boolean')
+
+    const pptx = await element.load(SAMPLE_FIXTURES.pptx, { format: 'pptx' })
+    expect(pptx.format).toBe('pptx')
+    expect(slideChangeCount).toBeGreaterThan(0)
+    expect(typeof element.goToSlide(0)).toBe('boolean')
   })
 
   it.skipIf(!supportsCustomElementWrapper)('reconnects and reloads src-driven content after disconnect', async () => {

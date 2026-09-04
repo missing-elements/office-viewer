@@ -15,6 +15,7 @@ Build a framework-neutral, read-only Web Component that renders Office Open XML 
 - Milestone 0 spike is complete with validated upstream integration notes and asset checks.
 - Milestone 1 is complete with an initial `OfficeViewerElement` wrapper, loading/error states, and lifecycle hardening.
 - The wrapper now supports abort-aware `load(..., { signal })`, stale-request guards, and reconnect behavior for attribute-driven URL loads.
+- Milestone 2 has started with format adapter modules plus wrapper progress/change events and format-specific navigation methods.
 - The custom-element API remains provisional until adapters and event semantics are fully hardened.
 
 ## Scope
