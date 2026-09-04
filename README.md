@@ -4,7 +4,9 @@ Architecture spike for a standalone, read-only browser-based Office Open XML vie
 
 ## Spike scope
 
-This repository currently contains a technical spike, not the finished `<office-viewer>` custom element.
+This repository currently contains a technical spike with an initial `<office-viewer>` custom-element wrapper.
+
+Milestone 1 (minimal component shell and lifecycle baseline) is complete; the API remains experimental.
 
 Included in this milestone:
 
@@ -13,13 +15,31 @@ Included in this milestone:
 - representative DOCX, XLSX, and PPTX fixtures under `/public/fixtures`
 - focused Vitest + WebdriverIO tests
 - production-build asset checks and bundle-size notes
+- first-pass `OfficeViewerElement` wrapper that delegates to the integration spike engine
 
 Not included yet:
 
-- the polished public custom-element API
+- the polished, stable public custom-element API
 - common printing
 - PDF support
 - a public `workerUrl` option
+
+## Initial custom-element slice (experimental)
+
+The package now exports an early wrapper for browser usage:
+
+- `OfficeViewerElement`
+- `defineOfficeViewerElement()`
+
+Current wrapper behavior:
+
+- delegates loading/reload/destroy to the existing `OoxmlIntegrationSpike`
+- supports `src`, `file-name`, `file-type`, `mode`, and `wasm-url` attributes
+- exposes `load()`, `reload()`, `destroy()`, and `getSummary()`
+- supports request cancellation via `load(source, { signal })` using `AbortSignal`
+- dispatches `loadstart`, `ready`, `loaderror`, and `destroy` events
+
+This surface is intentionally provisional while the final public API is being validated.
 
 ## Install
 
@@ -72,7 +92,7 @@ Then open:
 
 ## Known limitations
 
-- The spike intentionally avoids the final custom-element API.
+- The custom-element wrapper is an initial slice and may change before the stable release.
 - The harness normalizes `File`, `Blob`, and `Uint8Array` inputs to `ArrayBuffer` because current upstream declarations type `load(source)` as `string | ArrayBuffer`.
 - The spike verifies Vite 8 development/build behavior and a local static preview. It does not add custom worker hosting because upstream does not expose a public `workerUrl`.
 - If a bundler does not preserve upstream `new URL(..., import.meta.url)` WASM resolution, copy the required `*_parser_bg.wasm` file into served assets and pass `wasmUrl`.

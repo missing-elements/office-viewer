@@ -1,4 +1,11 @@
-import { OoxmlIntegrationSpike, SAMPLE_FIXTURES, type OfficeFormat, type OfficeSpikeLoadOptions, type OfficeSource } from '../src'
+import {
+  defineOfficeViewerElement,
+  SAMPLE_FIXTURES,
+  type OfficeFormat,
+  type OfficeSource,
+  type OfficeViewerElement,
+  type OfficeViewerLoadOptions
+} from '../src'
 
 const viewer = document.querySelector<HTMLDivElement>('#viewer')
 const formatSelect = document.querySelector<HTMLSelectElement>('#format')
@@ -14,11 +21,11 @@ if (!viewer || !formatSelect || !modeSelect || !urlInput || !fileInput || !wasmU
 }
 
 const ui = { viewer, formatSelect, modeSelect, urlInput, fileInput, wasmUrlInput, status, summary }
-const harness = new OoxmlIntegrationSpike(ui.viewer)
+const viewerElement = createViewerElement(ui)
 
 const currentFormat = (): OfficeFormat => ui.formatSelect.value as OfficeFormat
 
-function buildOptions(): OfficeSpikeLoadOptions {
+function buildOptions(): OfficeViewerLoadOptions {
   return {
     format: currentFormat(),
     mode: ui.modeSelect.value === 'main' ? 'main' : 'worker',
@@ -27,15 +34,20 @@ function buildOptions(): OfficeSpikeLoadOptions {
 }
 
 function refreshSummary(): void {
-  ui.summary.textContent = JSON.stringify(harness.getSummary(), null, 2)
+  ui.summary.textContent = JSON.stringify(viewerElement?.getSummary() ?? null, null, 2)
 }
 
 async function runLoad(source: OfficeSource, options = buildOptions()): Promise<void> {
+  if (!viewerElement) {
+    ui.status.textContent = 'Viewer failed to initialize. Check console for details.'
+    return
+  }
+
   ui.status.textContent = 'Loading…'
   refreshSummary()
 
   try {
-    const result = await harness.load(source, options)
+    const result = await viewerElement.load(source, options)
     ui.status.textContent = `${result.format.toUpperCase()} ready in ${Math.round(result.loadCompletedMs ?? 0)}ms (${result.effectiveMode})`
     refreshSummary()
   } catch (error) {
@@ -79,7 +91,12 @@ document.querySelector('#sample-file')?.addEventListener('click', async () => {
   })
 })
 document.querySelector('#reload')?.addEventListener('click', () => {
-  void harness.reload()
+  if (!viewerElement) {
+    ui.status.textContent = 'Viewer failed to initialize. Check console for details.'
+    return
+  }
+
+  void viewerElement.reload()
     .then((result) => {
       ui.status.textContent = `Reloaded ${result.format.toUpperCase()} in ${Math.round(result.loadCompletedMs ?? 0)}ms (${result.effectiveMode})`
       refreshSummary()
@@ -90,10 +107,44 @@ document.querySelector('#reload')?.addEventListener('click', () => {
     })
 })
 document.querySelector('#destroy')?.addEventListener('click', () => {
-  harness.destroy()
+  if (!viewerElement) {
+    ui.status.textContent = 'Viewer failed to initialize. Check console for details.'
+    return
+  }
+
+  viewerElement.destroy()
   ui.status.textContent = 'Destroyed active viewer.'
   refreshSummary()
 })
 
 syncSampleUrl()
 refreshSummary()
+
+function createViewerElement(model: typeof ui): OfficeViewerElement | null {
+  try {
+    defineOfficeViewerElement()
+    const candidate = document.createElement('office-viewer') as Partial<OfficeViewerElement>
+
+    if (typeof candidate.load !== 'function' || typeof candidate.getSummary !== 'function' || typeof candidate.destroy !== 'function') {
+      throw new Error('Custom element upgraded to an unexpected shape.')
+    }
+
+    const element = candidate as OfficeViewerElement
+    element.style.width = '100%'
+    element.style.height = '100%'
+    model.viewer.replaceChildren(element)
+    return element
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    model.status.textContent = `Viewer bootstrap failed: ${message}`
+    model.summary.textContent = JSON.stringify({
+      error: {
+        name: error instanceof Error ? error.name : 'Error',
+        message
+      }
+    }, null, 2)
+
+    console.error('office-viewer bootstrap failed', error)
+    return null
+  }
+}

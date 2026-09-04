@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { detectOfficeFormat, normalizeOfficeSource, OoxmlIntegrationSpike } from '../src'
+import { defineOfficeViewerElement, detectOfficeFormat, normalizeOfficeSource, OfficeViewerElement, OoxmlIntegrationSpike } from '../src'
 
 describe('OOXML spike imports', () => {
   it('imports the three upstream format entry points', async () => {
@@ -31,5 +31,10 @@ describe('OOXML spike imports', () => {
     expect(normalized.sourceKind).toBe('uint8array')
     expect(normalized.format).toBe('docx')
     expect(OoxmlIntegrationSpike).toBeTypeOf('function')
+  })
+
+  it('exports the initial custom-element wrapper surface', () => {
+    expect(OfficeViewerElement).toBeTypeOf('function')
+    expect(defineOfficeViewerElement).toBeTypeOf('function')
   })
 })

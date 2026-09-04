@@ -10,6 +10,13 @@
 
 Build a framework-neutral, read-only Web Component that renders Office Open XML documents directly in the browser without uploading files to a service and without embedding a full Office editor runtime.
 
+## Current status snapshot
+
+- Milestone 0 spike is complete with validated upstream integration notes and asset checks.
+- Milestone 1 is complete with an initial `OfficeViewerElement` wrapper, loading/error states, and lifecycle hardening.
+- The wrapper now supports abort-aware `load(..., { signal })`, stale-request guards, and reconnect behavior for attribute-driven URL loads.
+- The custom-element API remains provisional until adapters and event semantics are fully hardened.
+
 ## Scope
 
 ### Initial formats
@@ -389,7 +396,7 @@ images.pptx
 
 Do not finalize the custom-element API before this milestone is complete.
 
-### Milestone 1 — Minimal DOCX component
+### Milestone 1 — Minimal DOCX component (complete)
 
 - Create package skeleton.
 - Implement Shadow DOM and bounded container.
