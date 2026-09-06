@@ -6,7 +6,7 @@ Architecture spike for a standalone, read-only browser-based Office Open XML vie
 
 This repository currently contains a technical spike with an initial `<office-viewer>` custom-element wrapper.
 
-Milestone 1 (minimal component shell and lifecycle baseline) is complete; the API remains experimental.
+Milestones 1 and 2 (minimal component shell, lifecycle baseline, XLSX/PPTX adapters, and format-specific events/navigation) are complete; the API remains experimental.
 
 Included in this milestone:
 

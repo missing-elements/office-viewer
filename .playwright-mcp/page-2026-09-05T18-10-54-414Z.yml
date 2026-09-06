@@ -1,0 +1,46 @@
+- generic [active] [ref=e1]:
+  - complementary [ref=e2]:
+    - heading "OOXML spike" [level=1] [ref=e3]
+    - paragraph [ref=e4]:
+      - text: Raw integration harness for
+      - code [ref=e5]: "@silurus/ooxml"
+      - text: . Worker mode is the default path.
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - text: Format
+        - combobox "Format" [ref=e8]:
+          - option "DOCX" [selected]
+          - option "XLSX"
+          - option "PPTX"
+      - generic [ref=e9]:
+        - text: Mode
+        - combobox "Mode" [ref=e10]:
+          - option "worker" [selected]
+          - option "main"
+      - generic [ref=e11]:
+        - text: URL source
+        - textbox "URL source" [ref=e12]: /fixtures/sample.docx
+      - generic [ref=e13]:
+        - text: Local file source
+        - button "Local file source" [ref=e14]
+      - generic [ref=e15]:
+        - text: Optional wasmUrl override
+        - textbox "Optional wasmUrl override" [ref=e16]:
+          - /placeholder: leave empty to use upstream default asset resolution
+    - generic [ref=e17]:
+      - button "Load URL" [ref=e18] [cursor=pointer]
+      - button "Load File" [ref=e19] [cursor=pointer]
+    - generic [ref=e20]:
+      - button "Sample URL" [ref=e21] [cursor=pointer]
+      - button "Sample File" [ref=e22] [cursor=pointer]
+    - generic [ref=e23]:
+      - button "Reload" [ref=e24] [cursor=pointer]
+      - button "Destroy" [ref=e25] [cursor=pointer]
+    - generic [ref=e26]:
+      - spinbutton [ref=e27]: "0"
+      - button "Go Index" [ref=e28] [cursor=pointer]
+    - generic [ref=e29]: "null"
+  - main [ref=e30]:
+    - generic [ref=e31]:
+      - strong [ref=e32]: "Status:"
+      - text: Idle

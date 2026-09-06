@@ -33,6 +33,21 @@ describe('OOXML spike imports', () => {
     expect(OoxmlIntegrationSpike).toBeTypeOf('function')
   })
 
+  it('retains independent copies of caller-owned binary inputs', async () => {
+    const arrayBuffer = new Uint8Array([1, 2, 3]).buffer
+    const arrayBufferLoad = await normalizeOfficeSource(arrayBuffer, { format: 'docx' })
+    new Uint8Array(arrayBuffer)[0] = 9
+
+    const sourceView = new Uint8Array([4, 5, 6])
+    const uint8ArrayLoad = await normalizeOfficeSource(sourceView, { format: 'xlsx' })
+    sourceView[0] = 9
+
+    expect(arrayBufferLoad.source).toBeInstanceOf(ArrayBuffer)
+    expect(uint8ArrayLoad.source).toBeInstanceOf(ArrayBuffer)
+    expect(new Uint8Array(arrayBufferLoad.source as ArrayBuffer)).toEqual(new Uint8Array([1, 2, 3]))
+    expect(new Uint8Array(uint8ArrayLoad.source as ArrayBuffer)).toEqual(new Uint8Array([4, 5, 6]))
+  })
+
   it('exports the initial custom-element wrapper surface', () => {
     expect(OfficeViewerElement).toBeTypeOf('function')
     expect(defineOfficeViewerElement).toBeTypeOf('function')
