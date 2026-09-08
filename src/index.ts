@@ -1,2 +1,5 @@
 export * from './ooxml-spike'
 export * from './office-viewer-element'
+export * from './viewers/docx-adapter'
+export * from './viewers/xlsx-adapter'
+export * from './viewers/pptx-adapter'

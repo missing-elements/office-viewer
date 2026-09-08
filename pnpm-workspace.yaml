@@ -1,3 +1,7 @@
+packages:
+  - 'src'
+  - 'demo'
+  - 'tests'
 allowBuilds:
   edgedriver: false
   geckodriver: true
