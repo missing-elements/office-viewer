@@ -262,7 +262,31 @@ export class OoxmlIntegrationSpike {
     this.pendingState = null
     this.destroyActive()
   }
-
+  
+  async downloadOriginal(): Promise<ArrayBuffer> {
+    if (!this.retainedLoad) {
+      throw new Error('No source loaded to download.')
+    }
+  
+    const { source, sourceKind } = this.retainedLoad
+  
+    if (sourceKind === 'url') {
+      try {
+        // source is guaranteed to be a string URL here due to sourceKind === 'url'
+        const response = await fetch(source as string)
+        if (!response.ok) {
+          throw new Error(`Failed to download original source: ${response.statusText}`)
+        }
+        return await response.arrayBuffer()
+      } catch (e) {
+        throw new Error(`Network error downloading source: ${(e as Error).message}`)
+      }
+    } else {
+      // File, Blob, Uint8Array sources are already held as ArrayBuffers in retainedLoad
+      return source as ArrayBuffer
+    }
+  }
+  
   goToPage(pageIndex: number): boolean {
     return this.navigateTo('docx', pageIndex)
   }

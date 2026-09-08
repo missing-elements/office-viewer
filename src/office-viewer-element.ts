@@ -219,6 +219,10 @@ export class OfficeViewerElement extends HTMLElement {
     return this.getHarness().goToSheet(sheetIndex)
   }
 
+  async downloadOriginal(): Promise<void> {
+    await this.getHarness().downloadOriginal()
+  }
+
   destroy(): void {
     this.cancelActiveRequest(createAbortError('Viewer destroyed.'))
     this.requestGeneration += 1

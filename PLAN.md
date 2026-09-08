@@ -88,10 +88,7 @@ src/
     docx-adapter.ts
     xlsx-adapter.ts
     pptx-adapter.ts
-  ui/
-    loading-view.ts
-    error-view.ts
-    toolbar.ts
+ui/
   themes/
     shell.css
 ```
@@ -196,7 +193,6 @@ src
 file-name
 file-type
 mode="worker|main"
-theme
 zoom
 page
 slide
@@ -204,7 +200,6 @@ sheet
 enable-text-selection
 enable-hyperlinks
 enable-download
-show-toolbar
 ```
 
 `locale` is intentionally excluded. Printing is intentionally excluded from the initial common API.
@@ -272,36 +267,6 @@ Do not enable optional renderers by default:
 
 Add public configuration only after verifying upstream types and worker-mode behavior. Optional assets must not be fetched for documents that do not need them.
 
-## Styling and accessibility
-
-Use an open Shadow DOM, but provide only shell styling where it has clear value:
-
-- viewer background/desk;
-- page or slide gaps;
-- shadows;
-- status UI;
-- optional toolbar;
-- XLSX shell elements where supported.
-
-Do not imply that authored document content can be themed. `locale` is not part of the MVP.
-
-The host must have a bounded height:
-
-```css
-office-viewer {
-  display: block;
-  height: 100dvh;
-}
-```
-
-Required accessibility work:
-
-- `aria-busy` while loading;
-- accessible loading and error status;
-- labelled viewer region;
-- keyboard navigation where supported;
-- focus-visible styles;
-- clear fallback when Canvas or worker rendering is unavailable.
 
 ## Bundle and asset strategy
 
@@ -431,14 +396,8 @@ Do not finalize the custom-element API before this milestone is complete.
 - Add `downloadOriginal()`.
 - Do not add common printing until separately verified.
 
-### Milestone 5 — UX and accessibility
 
-- Add minimal shell styling.
-- Add optional toolbar only if it does not distort format-specific behavior.
-- Add keyboard and status accessibility.
-- Add drag-and-drop and mobile demo behavior.
-
-### Milestone 6 — Production release
+### Milestone 5 — Production release
 
 - Finalize exports and declarations.
 - Complete browser and visual tests.

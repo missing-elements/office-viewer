@@ -133,8 +133,6 @@ The component may style its own:
 - background or desk;
 - page/slide gaps;
 - page shadows;
-- loading and error UI;
-- toolbar, if added;
 - XLSX shell elements, if the upstream viewer permits styling.
 
 It must not imply that authored document content can be themed. If the upstream viewers do not provide meaningful styling hooks, skip the custom theme and provide only minimal layout variables.
