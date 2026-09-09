@@ -1,11 +1,16 @@
 import {
   defineOfficeViewerElement,
-  SAMPLE_FIXTURES,
   type OfficeFormat,
   type OfficeSource,
   type OfficeViewerElement,
-  type OfficeViewerLoadOptions
+  type OfficeViewerReadyEventDetail
 } from '../src'
+
+const SAMPLE_FIXTURES: Record<OfficeFormat, string> = {
+  docx: '/fixtures/sample.docx',
+  xlsx: '/fixtures/sample.xlsx',
+  pptx: '/fixtures/sample.pptx'
+}
 
 const viewer = document.querySelector<HTMLDivElement>('#viewer')
 const formatSelect = document.querySelector<HTMLSelectElement>('#format')
@@ -13,20 +18,19 @@ const modeSelect = document.querySelector<HTMLSelectElement>('#mode')
 const urlInput = document.querySelector<HTMLInputElement>('#url')
 const fileInput = document.querySelector<HTMLInputElement>('#file')
 const wasmUrlInput = document.querySelector<HTMLInputElement>('#wasmUrl')
-const targetIndexInput = document.querySelector<HTMLInputElement>('#target-index')
 const status = document.querySelector<HTMLElement>('#status')
 const summary = document.querySelector<HTMLElement>('#summary')
 
-if (!viewer || !formatSelect || !modeSelect || !urlInput || !fileInput || !wasmUrlInput || !targetIndexInput || !status || !summary) {
+if (!viewer || !formatSelect || !modeSelect || !urlInput || !fileInput || !wasmUrlInput || !status || !summary) {
   throw new Error('Demo UI is missing required elements.')
 }
 
-const ui = { viewer, formatSelect, modeSelect, urlInput, fileInput, wasmUrlInput, targetIndexInput, status, summary }
+const ui = { viewer, formatSelect, modeSelect, urlInput, fileInput, wasmUrlInput, status, summary }
 const viewerElement = createViewerElement(ui)
 
 const currentFormat = (): OfficeFormat => ui.formatSelect.value as OfficeFormat
 
-function buildOptions(): OfficeViewerLoadOptions {
+function buildOptions(): import('../src').OfficeViewerLoadOptions {
   return {
     format: currentFormat(),
     mode: ui.modeSelect.value === 'main' ? 'main' : 'worker',
@@ -35,7 +39,24 @@ function buildOptions(): OfficeViewerLoadOptions {
 }
 
 function refreshSummary(): void {
-  ui.summary.textContent = JSON.stringify(viewerElement?.getSummary() ?? null, null, 2)
+  if (!viewerElement) {
+    ui.summary.textContent = 'null'
+    return
+  }
+
+  ui.summary.textContent = JSON.stringify(
+    {
+      ready: viewerElement.ready,
+      error: viewerElement.error ? { name: viewerElement.error.name, message: viewerElement.error.message } : null,
+      format: viewerElement.format,
+      mode: viewerElement.mode,
+      viewerType: viewerElement.getViewer()?.constructor?.name ?? null,
+      documentType: viewerElement.getDocument()?.constructor?.name ?? null,
+      engineType: viewerElement.getEngine()?.constructor?.name ?? null
+    },
+    null,
+    2
+  )
 }
 
 async function runLoad(source: OfficeSource, options = buildOptions()): Promise<void> {
@@ -48,8 +69,13 @@ async function runLoad(source: OfficeSource, options = buildOptions()): Promise<
   refreshSummary()
 
   try {
-    const result = await viewerElement.load(source, options)
-    ui.status.textContent = `${result.format.toUpperCase()} ready in ${Math.round(result.loadCompletedMs ?? 0)}ms (${result.effectiveMode})`
+    await viewerElement.load(source, options)
+    const detail: OfficeViewerReadyEventDetail = {
+      format: viewerElement.format ?? options.format ?? currentFormat(),
+      requestedMode: options.mode ?? 'worker',
+      effectiveMode: viewerElement.mode ?? options.mode ?? 'worker'
+    }
+    ui.status.textContent = `${detail.format.toUpperCase()} ready (${detail.effectiveMode})`
     refreshSummary()
   } catch (error) {
     ui.status.textContent = `Load failed: ${error instanceof Error ? error.message : String(error)}`
@@ -62,7 +88,7 @@ function syncSampleUrl(): void {
 }
 
 if (viewerElement) {
-  for (const eventName of ['progress', 'pagechange', 'sheetchange', 'slidechange']) {
+  for (const eventName of ['ready', 'loaderror', 'destroy']) {
     viewerElement.addEventListener(eventName, () => {
       refreshSummary()
     })
@@ -105,9 +131,10 @@ document.querySelector('#reload')?.addEventListener('click', () => {
     return
   }
 
-  void viewerElement.reload()
-    .then((result) => {
-      ui.status.textContent = `Reloaded ${result.format.toUpperCase()} in ${Math.round(result.loadCompletedMs ?? 0)}ms (${result.effectiveMode})`
+  void viewerElement
+    .reload()
+    .then(() => {
+      ui.status.textContent = `Reloaded ${viewerElement.format?.toUpperCase() ?? ''} (${viewerElement.mode ?? ''})`
       refreshSummary()
     })
     .catch((error) => {
@@ -125,31 +152,6 @@ document.querySelector('#destroy')?.addEventListener('click', () => {
   ui.status.textContent = 'Destroyed active viewer.'
   refreshSummary()
 })
-document.querySelector('#go-index')?.addEventListener('click', () => {
-  if (!viewerElement) {
-    ui.status.textContent = 'Viewer failed to initialize. Check console for details.'
-    return
-  }
-
-  const indexValue = Number(ui.targetIndexInput.value)
-  if (!Number.isFinite(indexValue) || indexValue < 0) {
-    ui.status.textContent = 'Enter a valid non-negative index.'
-    return
-  }
-
-  const normalizedIndex = Math.trunc(indexValue)
-  const format = currentFormat()
-  const moved = format === 'docx'
-    ? viewerElement.goToPage(normalizedIndex)
-    : format === 'xlsx'
-      ? viewerElement.goToSheet(normalizedIndex)
-      : viewerElement.goToSlide(normalizedIndex)
-
-  ui.status.textContent = moved
-    ? `Requested ${format.toUpperCase()} index ${normalizedIndex}.`
-    : `Navigation is not available for the current ${format.toUpperCase()} viewer instance.`
-  refreshSummary()
-})
 
 syncSampleUrl()
 refreshSummary()
@@ -161,11 +163,11 @@ function createViewerElement(model: typeof ui): OfficeViewerElement | null {
 
     if (
       typeof candidate.load !== 'function'
-      || typeof candidate.getSummary !== 'function'
+      || typeof candidate.reload !== 'function'
       || typeof candidate.destroy !== 'function'
-      || typeof candidate.goToPage !== 'function'
-      || typeof candidate.goToSheet !== 'function'
-      || typeof candidate.goToSlide !== 'function'
+      || typeof candidate.getViewer !== 'function'
+      || typeof candidate.getDocument !== 'function'
+      || typeof candidate.getEngine !== 'function'
     ) {
       throw new Error('Custom element upgraded to an unexpected shape.')
     }
@@ -178,12 +180,16 @@ function createViewerElement(model: typeof ui): OfficeViewerElement | null {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     model.status.textContent = `Viewer bootstrap failed: ${message}`
-    model.summary.textContent = JSON.stringify({
-      error: {
-        name: error instanceof Error ? error.name : 'Error',
-        message
-      }
-    }, null, 2)
+    model.summary.textContent = JSON.stringify(
+      {
+        error: {
+          name: error instanceof Error ? error.name : 'Error',
+          message
+        }
+      },
+      null,
+      2
+    )
 
     console.error('office-viewer bootstrap failed', error)
     return null

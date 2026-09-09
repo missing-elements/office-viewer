@@ -1,46 +1,55 @@
-import type { RetainedLoad } from '../ooxml-spike'
-import type { AdapterLoadHooks, LoadedAdapter } from './adapter-types'
-import { invokeViewerMethod } from '../viewer-adapter'
+import type { AdapterLoadOptions, AdapterSource, ViewerAdapter } from './adapter-types'
 
-export async function loadDocxAdapter(retainedLoad: RetainedLoad, container: HTMLElement, hooks: AdapterLoadHooks): Promise<LoadedAdapter> {
-  const { DocxDocument, DocxScrollViewer } = await import('@silurus/ooxml/docx')
-  const engine = await DocxDocument.load(cloneRetainedSource(retainedLoad), {
-    mode: retainedLoad.options.mode ?? 'worker',
-    wasmUrl: retainedLoad.options.wasmUrl,
-    progressiveLayout: true
-  })
+export async function createDocxAdapter(): Promise<ViewerAdapter> {
+  const docx = await import('@silurus/ooxml/docx')
 
-  const viewer = DocxScrollViewer.fromDocument(container, engine, {
-    enableHyperlinks: true,
-    enableTextSelection: true,
-    onVisiblePageChange: (topIndex, total, layoutComplete) => {
-      hooks.onSummaryUpdate({
-        currentIndex: topIndex,
-        totalCount: total,
-        layoutComplete
-      })
-    },
-    onError: (error) => {
-      hooks.onError(error)
-    }
-  })
-
-  hooks.onSummaryUpdate({
-    currentIndex: viewer.topVisiblePage,
-    totalCount: viewer.pageCount,
-    layoutComplete: viewer.layoutComplete
-  })
+  let engine: Awaited<ReturnType<typeof docx.DocxDocument.load>> | null = null
+  let viewer: ReturnType<typeof docx.DocxScrollViewer.fromDocument> | null = null
 
   return {
-    engine,
-    viewer
+    format: 'docx',
+    get viewer() {
+      return viewer
+    },
+    get document() {
+      return engine
+    },
+    get engine() {
+      return engine
+    },
+    async load(source: AdapterSource, options: AdapterLoadOptions): Promise<void> {
+      const wasmUrl = normalizeWasmUrl(options.wasmUrl)
+      engine = await docx.DocxDocument.load(source.source, {
+        mode: options.mode ?? 'worker',
+        wasmUrl
+      })
+      const container = options.container ?? createDetachedContainer()
+      viewer = docx.DocxScrollViewer.fromDocument(container, engine)
+    },
+    destroy(): void {
+      viewer?.destroy()
+      engine?.destroy()
+      viewer = null
+      engine = null
+    }
   }
 }
 
-export function navigateDocxViewer(viewer: { destroy(): void }, targetIndex: number): boolean {
-  return invokeViewerMethod(viewer, ['scrollToPage', 'goToPage', 'setPageIndex', 'setVisiblePageIndex'], targetIndex)
+function normalizeWasmUrl(wasmUrl: string | URL | undefined): string | undefined {
+  if (wasmUrl instanceof URL) {
+    return wasmUrl.toString()
+  }
+  return wasmUrl
 }
 
-function cloneRetainedSource(retainedLoad: RetainedLoad): string | ArrayBuffer {
-  return typeof retainedLoad.source === 'string' ? retainedLoad.source : retainedLoad.source.slice(0)
+function createDetachedContainer(): HTMLElement {
+  if (typeof document === 'undefined') {
+    throw new Error('A document is required to create a viewer container.')
+  }
+
+  const container = document.createElement('div')
+  container.style.width = '100%'
+  container.style.height = '100%'
+  container.style.overflow = 'auto'
+  return container
 }

@@ -11,13 +11,19 @@ export default defineConfig({
     strictPort: true
   },
   build: {
+    lib: {
+      entry: resolve(rootDir, 'src/index.ts'),
+      name: 'OfficeViewer',
+      fileName: (format) => `office-viewer.${format}.js`,
+      formats: ['es']
+    },
     rollupOptions: {
-      input: {
-        demo: resolve(rootDir, 'demo/index.html'),
-        'measure-combined': resolve(rootDir, 'demo/measure-combined.html'),
-        'measure-docx': resolve(rootDir, 'demo/measure-docx.html'),
-        'measure-xlsx': resolve(rootDir, 'demo/measure-xlsx.html'),
-        'measure-pptx': resolve(rootDir, 'demo/measure-pptx.html')
+      external: ['@silurus/ooxml'],
+      output: {
+        entryFileNames: 'office-viewer.es.js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]',
+        globals: {}
       }
     }
   }

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { defineOfficeViewerElement, detectOfficeFormat, normalizeOfficeSource, OfficeViewerElement, OoxmlIntegrationSpike } from '../src'
+import { defineOfficeViewerElement, detectOfficeFormat, OfficeViewerElement, resolveOfficeSource } from '../src'
 
-describe('OOXML spike imports', () => {
+describe('office-viewer imports', () => {
   it('imports the three upstream format entry points', async () => {
     const [docx, xlsx, pptx] = await Promise.all([
       import('@silurus/ooxml/docx'),
@@ -16,30 +16,26 @@ describe('OOXML spike imports', () => {
   })
 
   it('detects formats conservatively', () => {
-    expect(detectOfficeFormat({ fileName: 'report.docx' })).toBe('docx')
-    expect(detectOfficeFormat({ fileName: 'book.xlsx' })).toBe('xlsx')
-    expect(detectOfficeFormat({ fileName: 'deck.pptx' })).toBe('pptx')
+    expect(detectOfficeFormat('report.docx')).toBe('docx')
+    expect(detectOfficeFormat('book.xlsx')).toBe('xlsx')
+    expect(detectOfficeFormat('deck.pptx')).toBe('pptx')
   })
 
-  it('normalizes Uint8Array and preserves the spike API surface', async () => {
-    const normalized = await normalizeOfficeSource(new Uint8Array([1, 2, 3]), {
-      format: 'docx',
-      fileName: 'sample.docx'
-    })
+  it('normalizes Uint8Array to an independent ArrayBuffer copy', async () => {
+    const normalized = await resolveOfficeSource(new Uint8Array([1, 2, 3]), 'sample.docx', 'docx')
 
     expect(normalized.source).toBeInstanceOf(ArrayBuffer)
     expect(normalized.sourceKind).toBe('uint8array')
     expect(normalized.format).toBe('docx')
-    expect(OoxmlIntegrationSpike).toBeTypeOf('function')
   })
 
   it('retains independent copies of caller-owned binary inputs', async () => {
     const arrayBuffer = new Uint8Array([1, 2, 3]).buffer
-    const arrayBufferLoad = await normalizeOfficeSource(arrayBuffer, { format: 'docx' })
+    const arrayBufferLoad = await resolveOfficeSource(arrayBuffer, undefined, 'docx')
     new Uint8Array(arrayBuffer)[0] = 9
 
     const sourceView = new Uint8Array([4, 5, 6])
-    const uint8ArrayLoad = await normalizeOfficeSource(sourceView, { format: 'xlsx' })
+    const uint8ArrayLoad = await resolveOfficeSource(sourceView, 'book.xlsx', 'xlsx')
     sourceView[0] = 9
 
     expect(arrayBufferLoad.source).toBeInstanceOf(ArrayBuffer)
@@ -48,7 +44,7 @@ describe('OOXML spike imports', () => {
     expect(new Uint8Array(uint8ArrayLoad.source as ArrayBuffer)).toEqual(new Uint8Array([4, 5, 6]))
   })
 
-  it('exports the initial custom-element wrapper surface', () => {
+  it('exports the headless custom-element surface', () => {
     expect(OfficeViewerElement).toBeTypeOf('function')
     expect(defineOfficeViewerElement).toBeTypeOf('function')
   })

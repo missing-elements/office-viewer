@@ -1,32 +1,23 @@
-import type { EngineInstance, OfficeSpikeSummaryUpdate, RetainedLoad, ViewerInstance } from '../ooxml-spike'
+import type { OfficeFormat, OfficeViewerMode } from '../types'
 
-export interface AdapterLoadHooks {
-  onSummaryUpdate(update: OfficeSpikeSummaryUpdate): void
-  onError(error: unknown): void
+export interface AdapterSource {
+  readonly source: string | ArrayBuffer
+  readonly format: OfficeFormat
+  readonly fileName?: string
 }
 
-export interface LoadedAdapter {
-  engine: EngineInstance
-  viewer: ViewerInstance
+export interface AdapterLoadOptions {
+  mode?: OfficeViewerMode
+  wasmUrl?: string | URL
+  container?: HTMLElement
 }
 
-export interface OfficeViewerAdapter {
-  load(retainedLoad: RetainedLoad, container: HTMLElement, hooks: AdapterLoadHooks): Promise<LoadedAdapter>
-  
-  // --- General Navigation/Interaction ---
-  navigate(viewer: ViewerInstance, targetIndex: number): boolean
-  
-  // --- DOCX Specific ---
-  goToPage?(pageIndex: number): boolean
-  setScale?(scale: number): void
-  findText?(query: string): void
-  clearFind?(): void
+export interface ViewerAdapter {
+  readonly format: OfficeFormat
+  readonly viewer: unknown | null
+  readonly document: unknown | null
+  readonly engine: unknown | null
 
-  // --- XLSX Specific ---
-  goToSheet?(sheetIndex: number): boolean
-  selectRange?(rangeIdentifier: string): void
-  // Add other XLSX specific methods as defined in the architecture
-  
-  // --- PPTX Specific ---
-  goToSlide?(slideIndex: number): boolean
+  load(source: AdapterSource, options: AdapterLoadOptions): Promise<void>
+  destroy(): void
 }

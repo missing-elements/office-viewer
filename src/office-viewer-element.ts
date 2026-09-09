@@ -1,49 +1,21 @@
-import {
-  OoxmlIntegrationSpike,
-  type OfficeFormat,
-  type OfficeSpikeError,
-  type OfficeSpikeLoadOptions,
-  type OfficeSpikeRunSummary,
-  type OfficeSource,
-  type OfficeViewerMode
-} from './ooxml-spike'
-import { CHANGE_EVENT_BY_FORMAT } from './viewer-adapter'
-
-export interface OfficeViewerLoadOptions extends OfficeSpikeLoadOptions {
-  signal?: AbortSignal
-}
-
-export interface OfficeViewerReadyEventDetail {
-  summary: OfficeSpikeRunSummary
-}
-
-export interface OfficeViewerLoadErrorEventDetail {
-  error: OfficeSpikeError
-  summary: OfficeSpikeRunSummary | null
-}
-
-export interface OfficeViewerProgressEventDetail {
-  summary: OfficeSpikeRunSummary
-}
-
-export interface OfficeViewerIndexChangeEventDetail {
-  format: OfficeFormat
-  index: number
-  totalCount?: number
-  layoutComplete?: boolean
-  sheetNames?: string[]
-  summary: OfficeSpikeRunSummary
-}
+import type {
+  OfficeFormat,
+  OfficeSource,
+  OfficeViewerLoadErrorEventDetail,
+  OfficeViewerLoadOptions,
+  OfficeViewerMode,
+  OfficeViewerReadyEventDetail
+} from './types'
+import { resolveOfficeSource } from './source-resolver'
+import { LoadController } from './load-controller'
+import type { ViewerAdapter } from './viewers/adapter-types'
+import { createDocxAdapter, createPptxAdapter, createXlsxAdapter } from './viewers'
 
 export const OFFICE_VIEWER_TAG_NAME = 'office-viewer'
 
 const RELOAD_ATTRIBUTE_NAMES = new Set(['src', 'file-name', 'file-type', 'mode', 'wasm-url'])
 
-interface ActiveRequest {
-  id: number
-  signal: AbortSignal
-  detach(): void
-}
+type LifecycleState = 'idle' | 'loading' | 'ready' | 'error' | 'detached' | 'destroyed'
 
 if (typeof globalThis.HTMLElement === 'undefined') {
   ;(globalThis as { HTMLElement: typeof HTMLElement }).HTMLElement = class {} as typeof HTMLElement
@@ -54,13 +26,13 @@ export class OfficeViewerElement extends HTMLElement {
     return ['src', 'file-name', 'file-type', 'mode', 'wasm-url']
   }
 
-  private status: HTMLParagraphElement | null = null
-  private viewport: HTMLDivElement | null = null
-  private harness: OoxmlIntegrationSpike | null = null
-  private unsubscribeSummary: (() => void) | null = null
-  private lastProgressSignature: string | null = null
-  private requestGeneration = 0
-  private activeRequestController: AbortController | null = null
+  private loadController = new LoadController()
+  private lifecycleState: LifecycleState = 'idle'
+  private adapter: ViewerAdapter | null = null
+  private retainedSource: OfficeSource | null = null
+  private retainedOptions: OfficeViewerLoadOptions | null = null
+  private lastError: Error | null = null
+  private renderContainer: HTMLElement | null = null
 
   get src(): string | null {
     return this.getAttribute('src')
@@ -75,9 +47,32 @@ export class OfficeViewerElement extends HTMLElement {
     this.setAttribute('src', value)
   }
 
+  get ready(): boolean {
+    return this.lifecycleState === 'ready'
+  }
+
+  get error(): Error | null {
+    return this.lastError
+  }
+
+  get format(): OfficeFormat | null {
+    return this.adapter?.format ?? null
+  }
+
+  get mode(): OfficeViewerMode | null {
+    const mode = (this.adapter?.engine as { mode?: OfficeViewerMode } | null)?.mode
+    if (mode === 'worker' || mode === 'main') {
+      return mode
+    }
+    return null
+  }
+
   connectedCallback(): void {
-    this.ensureInitialized()
-    this.setBusy(false)
+    if (this.lifecycleState === 'destroyed') {
+      return
+    }
+
+    this.lifecycleState = 'idle'
 
     if (this.src?.trim()) {
       void this.loadFromAttributes()
@@ -85,9 +80,15 @@ export class OfficeViewerElement extends HTMLElement {
   }
 
   disconnectedCallback(): void {
-    this.cancelActiveRequest(createAbortError('Viewer disconnected.'))
-    this.harness?.destroy()
-    this.setBusy(false)
+    if (this.lifecycleState === 'destroyed') {
+      return
+    }
+
+    this.loadController.cancel(createAbortError('Viewer disconnected.'))
+    this.adapter?.destroy()
+    this.adapter = null
+    this.renderContainer = null
+    this.lifecycleState = 'detached'
   }
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
@@ -97,7 +98,6 @@ export class OfficeViewerElement extends HTMLElement {
 
     if (name === 'src' && !newValue?.trim()) {
       this.destroy()
-      this.updateStatus('Idle', true)
       return
     }
 
@@ -106,148 +106,114 @@ export class OfficeViewerElement extends HTMLElement {
     }
   }
 
-  async load(source: OfficeSource, options: OfficeViewerLoadOptions = {}): Promise<OfficeSpikeRunSummary> {
-    const { signal, ...loadOptions } = options
-    const harness = this.getHarness()
-    const request = this.beginRequest(signal)
+  async load(source: OfficeSource, options: OfficeViewerLoadOptions = {}): Promise<void> {
+    if (this.lifecycleState === 'destroyed') {
+      throw new Error('OfficeViewerElement has been destroyed. Call load() on a new element.')
+    }
+
+    const request = this.loadController.beginRequest(options.signal)
 
     if (request.signal.aborted) {
       request.detach()
       throw toAbortError(request.signal.reason)
     }
 
-    this.setBusy(true)
-    this.updateStatus('Loading document...')
+    this.retainedSource = source
+    this.retainedOptions = options
+    this.lastError = null
+    this.lifecycleState = 'loading'
     this.emit('loadstart')
 
     try {
-      const summary = await harness.load(source, this.mergeWithAttributes(loadOptions))
+      const resolved = await resolveOfficeSource(source, this.readFileName(), this.readFormat(options.format))
+      const adapter = await this.createAdapter(resolved.format)
 
-      if (!this.isCurrentRequest(request.id) || request.signal.aborted) {
+      if (!this.loadController.isCurrent(request.id) || request.signal.aborted) {
+        adapter.destroy()
         throw toAbortError(request.signal.reason)
       }
 
-      this.setBusy(false)
-      this.updateStatus(`${summary.format.toUpperCase()} ready (${summary.effectiveMode})`, true)
-      this.emit<OfficeViewerReadyEventDetail>('ready', { summary })
-      return summary
+      this.adapter?.destroy()
+      this.renderContainer = this.createRenderContainer()
+      this.adapter = adapter
+
+      await adapter.load(
+        { source: resolved.source, format: resolved.format, fileName: resolved.fileName },
+        {
+          mode: this.readMode(options.mode),
+          wasmUrl: this.readWasmUrl(options.wasmUrl),
+          container: this.renderContainer
+        }
+      )
+
+      if (!this.loadController.isCurrent(request.id) || request.signal.aborted) {
+        throw toAbortError(request.signal.reason)
+      }
+
+      this.lifecycleState = 'ready'
+      const detail: OfficeViewerReadyEventDetail = {
+        format: resolved.format,
+        requestedMode: this.readMode(options.mode),
+        effectiveMode: this.mode ?? this.readMode(options.mode)
+      }
+      this.emit<OfficeViewerReadyEventDetail>('ready', detail)
     } catch (error) {
-      if (!this.isCurrentRequest(request.id)) {
+      if (!this.loadController.isCurrent(request.id)) {
         throw error
       }
 
+      this.lifecycleState = 'error'
+      this.lastError = normalizeError(error)
+      this.emit<OfficeViewerLoadErrorEventDetail>('loaderror', { error: this.lastError })
+
       if (isAbortError(error) || request.signal.aborted) {
-        this.setBusy(false)
-        this.updateStatus('Load canceled.')
         throw toAbortError(request.signal.reason ?? error)
       }
 
-      this.setBusy(false)
-      const normalized = normalizeError(error)
-      this.updateStatus(`Load failed: ${normalized.message}`)
-      this.emit<OfficeViewerLoadErrorEventDetail>('loaderror', {
-        error: normalized,
-        summary: harness.getSummary()
-      })
       throw error
     } finally {
       request.detach()
     }
   }
 
-  async reload(): Promise<OfficeSpikeRunSummary> {
-    const harness = this.getHarness()
-    const request = this.beginRequest()
-
-    if (request.signal.aborted) {
-      request.detach()
-      throw toAbortError(request.signal.reason)
+  async reload(): Promise<void> {
+    if (this.lifecycleState === 'destroyed') {
+      throw new Error('OfficeViewerElement has been destroyed. Call load() on a new element.')
     }
 
-    this.setBusy(true)
-    this.updateStatus('Reloading document...')
-    this.emit('loadstart')
-
-    try {
-      const summary = await harness.reload()
-
-      if (!this.isCurrentRequest(request.id) || request.signal.aborted) {
-        throw toAbortError(request.signal.reason)
-      }
-
-      this.setBusy(false)
-      this.updateStatus(`${summary.format.toUpperCase()} reloaded (${summary.effectiveMode})`, true)
-      this.emit<OfficeViewerReadyEventDetail>('ready', { summary })
-      return summary
-    } catch (error) {
-      if (!this.isCurrentRequest(request.id)) {
-        throw error
-      }
-
-      if (isAbortError(error) || request.signal.aborted) {
-        this.setBusy(false)
-        this.updateStatus('Reload canceled.')
-        throw toAbortError(request.signal.reason ?? error)
-      }
-
-      this.setBusy(false)
-      const normalized = normalizeError(error)
-      this.updateStatus(`Reload failed: ${normalized.message}`)
-      this.emit<OfficeViewerLoadErrorEventDetail>('loaderror', {
-        error: normalized,
-        summary: harness.getSummary()
-      })
-      throw error
-    } finally {
-      request.detach()
+    if (!this.retainedSource) {
+      throw new Error('Nothing has been loaded yet.')
     }
-  }
 
-  getSummary(): OfficeSpikeRunSummary | null {
-    return this.harness?.getSummary() ?? null
-  }
-
-  goToPage(pageIndex: number): boolean {
-    return this.getHarness().goToPage(pageIndex)
-  }
-
-  goToSlide(slideIndex: number): boolean {
-    return this.getHarness().goToSlide(slideIndex)
-  }
-
-  goToSheet(sheetIndex: number): boolean {
-    return this.getHarness().goToSheet(sheetIndex)
-  }
-
-  async downloadOriginal(): Promise<void> {
-    await this.getHarness().downloadOriginal()
+    await this.load(this.retainedSource, this.retainedOptions ?? undefined)
   }
 
   destroy(): void {
-    this.cancelActiveRequest(createAbortError('Viewer destroyed.'))
-    this.requestGeneration += 1
-    this.harness?.destroy()
-    this.setBusy(false)
+    if (this.lifecycleState === 'destroyed') {
+      return
+    }
+
+    this.loadController.dispose()
+    this.adapter?.destroy()
+    this.adapter = null
+    this.renderContainer = null
+    this.retainedSource = null
+    this.retainedOptions = null
+    this.lastError = null
+    this.lifecycleState = 'destroyed'
     this.emit('destroy')
   }
 
-  private mergeWithAttributes(options: OfficeViewerLoadOptions): OfficeSpikeLoadOptions {
-    const attributeOptions = this.readAttributeOptions()
-    return {
-      format: options.format ?? attributeOptions.format,
-      fileName: options.fileName ?? attributeOptions.fileName,
-      mode: options.mode ?? attributeOptions.mode,
-      wasmUrl: options.wasmUrl ?? attributeOptions.wasmUrl
-    }
+  getViewer(): unknown | null {
+    return this.adapter?.viewer ?? null
   }
 
-  private readAttributeOptions(): OfficeSpikeLoadOptions {
-    return {
-      format: parseFormat(this.getAttribute('file-type')),
-      fileName: sanitizeAttribute(this.getAttribute('file-name')),
-      mode: parseMode(this.getAttribute('mode')),
-      wasmUrl: sanitizeAttribute(this.getAttribute('wasm-url'))
-    }
+  getDocument(): unknown | null {
+    return this.adapter?.document ?? null
+  }
+
+  getEngine(): unknown | null {
+    return this.adapter?.engine ?? null
   }
 
   private async loadFromAttributes(): Promise<void> {
@@ -259,22 +225,60 @@ export class OfficeViewerElement extends HTMLElement {
     try {
       await this.load(source)
     } catch {
-      // load() already updates status and emits loaderror when needed.
+      // load() already emits loaderror when needed.
     }
   }
 
-  private setBusy(isBusy: boolean): void {
-    this.setAttribute('aria-busy', isBusy ? 'true' : 'false')
+  private async createAdapter(format: OfficeFormat): Promise<ViewerAdapter> {
+    switch (format) {
+      case 'docx':
+        return createDocxAdapter()
+      case 'xlsx':
+        return createXlsxAdapter()
+      case 'pptx':
+        return createPptxAdapter()
+      default:
+        throw new Error(`Unsupported format: ${format}`)
+    }
   }
 
-  private updateStatus(message: string, hide = false): void {
-    const status = this.status
-    if (!status) {
-      return
+  private createRenderContainer(): HTMLElement {
+    if (typeof document === 'undefined') {
+      throw new Error('OfficeViewerElement requires a browser document.')
     }
 
-    status.hidden = hide
-    status.textContent = message
+    const container = document.createElement('div')
+    container.style.width = '100%'
+    container.style.height = '100%'
+    container.style.overflow = 'auto'
+    return container
+  }
+
+  private readFormat(explicit?: OfficeFormat): OfficeFormat | undefined {
+    const fromAttribute = parseFormat(this.getAttribute('file-type'))
+    return explicit ?? fromAttribute
+  }
+
+  private readFileName(): string | undefined {
+    return sanitizeAttribute(this.getAttribute('file-name'))
+  }
+
+  private readMode(explicit?: OfficeViewerMode): OfficeViewerMode {
+    if (explicit) {
+      return explicit
+    }
+
+    const fromAttribute = parseMode(this.getAttribute('mode'))
+    return fromAttribute ?? 'worker'
+  }
+
+  private readWasmUrl(explicit?: string | URL): string | URL | undefined {
+    if (explicit) {
+      return explicit
+    }
+
+    const fromAttribute = sanitizeAttribute(this.getAttribute('wasm-url'))
+    return fromAttribute
   }
 
   private emit<T>(name: string, detail?: T): void {
@@ -284,167 +288,6 @@ export class OfficeViewerElement extends HTMLElement {
     }
 
     this.dispatchEvent(new Event(name))
-  }
-
-  private getRenderRoot(): ShadowRoot | this {
-    if (typeof this.attachShadow !== 'function') {
-      return this
-    }
-
-    try {
-      return this.attachShadow({ mode: 'open' })
-    } catch {
-      // Some browser automation environments disable Shadow DOM APIs.
-      return this
-    }
-  }
-
-  private ensureInitialized(): void {
-    if (this.harness && this.status && this.viewport) {
-      return
-    }
-
-    if (typeof document === 'undefined') {
-      throw new Error('OfficeViewerElement requires a browser document.')
-    }
-
-    const renderRoot = this.getRenderRoot()
-    const style = document.createElement('style')
-    style.textContent = [
-      ':host { display: block; min-height: 16rem; }',
-      '.status { margin: 0 0 0.5rem; color: #9ca3af; font: 500 0.875rem/1.4 ui-sans-serif, system-ui, sans-serif; }',
-      '.status[hidden] { display: none; }',
-      '.viewport { height: 100%; min-height: 0; border-radius: 0.5rem; overflow: hidden; }'
-    ].join('')
-
-    const status = document.createElement('p')
-    status.className = 'status'
-    status.setAttribute('part', 'status')
-    status.setAttribute('role', 'status')
-    status.setAttribute('aria-live', 'polite')
-
-    const viewport = document.createElement('div')
-    viewport.className = 'viewport'
-    viewport.setAttribute('part', 'viewport')
-
-    renderRoot.append(style, status, viewport)
-
-    this.status = status
-    this.viewport = viewport
-    this.unsubscribeSummary?.()
-    this.harness = new OoxmlIntegrationSpike(viewport)
-    this.unsubscribeSummary = this.harness.subscribeSummary((summary) => {
-      this.handleSummary(summary)
-    })
-    this.updateStatus('Idle', true)
-  }
-
-  private beginRequest(externalSignal?: AbortSignal): ActiveRequest {
-    const id = ++this.requestGeneration
-    this.lastProgressSignature = null
-    this.cancelActiveRequest(createAbortError('Superseded by a newer request.'))
-
-    const controller = new AbortController()
-    this.activeRequestController = controller
-
-    let removeExternalListener = () => {}
-    if (externalSignal) {
-      if (externalSignal.aborted) {
-        controller.abort(externalSignal.reason)
-      } else {
-        const onExternalAbort = () => {
-          controller.abort(externalSignal.reason)
-        }
-
-        externalSignal.addEventListener('abort', onExternalAbort, { once: true })
-        removeExternalListener = () => {
-          externalSignal.removeEventListener('abort', onExternalAbort)
-        }
-      }
-    }
-
-    const onAbort = () => {
-      if (!this.isCurrentRequest(id)) {
-        return
-      }
-
-      this.harness?.destroy()
-      this.setBusy(false)
-      this.updateStatus('Load canceled.')
-    }
-
-    controller.signal.addEventListener('abort', onAbort, { once: true })
-
-    return {
-      id,
-      signal: controller.signal,
-      detach: () => {
-        removeExternalListener()
-        controller.signal.removeEventListener('abort', onAbort)
-        if (this.activeRequestController === controller) {
-          this.activeRequestController = null
-        }
-      }
-    }
-  }
-
-  private cancelActiveRequest(reason: unknown): void {
-    if (!this.activeRequestController) {
-      return
-    }
-
-    this.activeRequestController.abort(reason)
-    this.activeRequestController = null
-  }
-
-  private isCurrentRequest(id: number): boolean {
-    return this.requestGeneration === id
-  }
-
-  private getHarness(): OoxmlIntegrationSpike {
-    this.ensureInitialized()
-    if (!this.harness) {
-      throw new Error('OfficeViewerElement failed to initialize harness.')
-    }
-
-    return this.harness
-  }
-
-  private handleSummary(summary: OfficeSpikeRunSummary): void {
-    const signature = summarySignature(summary)
-    if (signature === this.lastProgressSignature) {
-      return
-    }
-
-    this.lastProgressSignature = signature
-    this.emit<OfficeViewerProgressEventDetail>('progress', {
-      summary
-    })
-
-    if (typeof summary.currentIndex !== 'number') {
-      return
-    }
-
-    this.emit<OfficeViewerIndexChangeEventDetail>(CHANGE_EVENT_BY_FORMAT[summary.format], {
-      format: summary.format,
-      index: summary.currentIndex,
-      totalCount: summary.totalCount,
-      layoutComplete: summary.layoutComplete,
-      sheetNames: summary.sheetNames ? [...summary.sheetNames] : undefined,
-      summary
-    })
-  }
-
-  findText(text: string): boolean {
-    return this.getHarness().findText(text)
-  }
-
-  clearFind(): void {
-    this.getHarness().clearFind()
-  }
-
-  selectRange(start: { page: number; index: number; element: string } | null, end: { page: number; index: number; element: string } | null): boolean {
-    return this.getHarness().selectRange(start, end)
   }
 }
 
@@ -485,58 +328,30 @@ function sanitizeAttribute(value: string | null): string | undefined {
   return trimmed ? trimmed : undefined
 }
 
-function normalizeError(error: unknown): OfficeSpikeError {
-  const value = error as { name?: string, message?: string, code?: string } | undefined
-  return {
-    name: value?.name ?? 'Error',
-    message: value?.message ?? String(error),
-    code: value?.code
-  }
-}
-
-function isAbortError(error: unknown): error is Error {
-  return error instanceof Error && error.name === 'AbortError'
-}
-
-function createAbortError(message: string): Error {
-  if (typeof DOMException === 'function') {
-    return new DOMException(message, 'AbortError')
+function normalizeError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error
   }
 
-  const error = new Error(message)
-  error.name = 'AbortError'
-  return error
+  return new Error(String(error))
 }
 
-function toAbortError(reason: unknown): Error {
-  if (isAbortError(reason)) {
+function isAbortError(error: unknown): error is DOMException {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
+function createAbortError(reason: string): DOMException {
+  return new DOMException(reason, 'AbortError')
+}
+
+function toAbortError(reason: unknown): DOMException {
+  if (reason instanceof DOMException && reason.name === 'AbortError') {
     return reason
   }
 
-  if (reason instanceof Error) {
-    if (reason.name === 'AbortError') {
-      return reason
-    }
-
-    return createAbortError(reason.message)
+  if (reason instanceof Error && reason.name === 'AbortError') {
+    return new DOMException(reason.message, 'AbortError')
   }
 
-  if (typeof reason === 'string' && reason.trim()) {
-    return createAbortError(reason)
-  }
-
-  return createAbortError('The operation was aborted.')
-}
-
-function summarySignature(summary: OfficeSpikeRunSummary): string {
-  const sheetNames = summary.sheetNames?.join(',') ?? ''
-  return [
-    summary.generation,
-    summary.format,
-    summary.currentIndex ?? -1,
-    summary.totalCount ?? -1,
-    summary.layoutComplete ? 1 : 0,
-    sheetNames,
-    summary.lastError?.message ?? ''
-  ].join('|')
+  return new DOMException(typeof reason === 'string' ? reason : 'Aborted.', 'AbortError')
 }

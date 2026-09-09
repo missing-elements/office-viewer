@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines the architecture for `@missing-elements/office-viewer`, a read-only Web Component for rendering Office Open XML documents in the browser.
+This document defines the architecture for `@missing-elements/office-viewer`, a **headless** Web Component that orchestrates `@silurus/ooxml` for Office Open XML documents in the browser.
 
 Initial formats:
 
@@ -12,19 +12,18 @@ Initial formats:
 
 The component uses `@silurus/ooxml` for parsing, layout, and Canvas rendering. It does not use ONLYOFFICE, `x2t`, PDF.js, or `pdfjs-viewer-element`.
 
-Architecture decisions recorded here are authoritative as of September 3, 2026. The upstream API, declarations, package exports, and asset behavior must be rechecked when upgrading `@silurus/ooxml`.
+Architecture decisions recorded here are authoritative as of September 9, 2026. The upstream API, declarations, package exports, and asset behavior must be rechecked when upgrading `@silurus/ooxml`.
 
 ## Goals
 
-- Render DOCX, XLSX, and PPTX locally in the browser.
-- Avoid uploading local document bytes to a service.
-- Provide a stable framework-neutral custom-element API.
+- Load DOCX, XLSX, and PPTX locally in the browser without uploading to a service.
+- Provide a **headless** custom element that manages lifecycle and exposes upstream APIs directly.
 - Follow the TypeScript/Vite/pnpm/Vitest/WebdriverIO conventions of `missing-elements/pdfjs-viewer`.
 - Use worker rendering by default.
 - Keep optional renderer modules out of the default application graph.
 - Make WASM and worker assets reliable in Vite, plain modules, static hosting, and verified bundler environments.
 - Make load, reload, disconnect, reconnect, and destroy deterministic.
-- Preserve format-specific behavior rather than forcing DOCX, XLSX, and PPTX into one model.
+- Preserve format-specific behavior by exposing upstream viewers directly rather than wrapping them.
 
 ## Non-goals
 
@@ -34,7 +33,8 @@ Architecture decisions recorded here are authoritative as of September 3, 2026. 
 - Macro execution.
 - Running embedded OLE applications.
 - Legacy binary formats.
-- Common printing API in the initial release.
+- Common printing API.
+- **Any UI: no Shadow DOM, no status indicators, no toolbars, no styles, no themes.**
 - Reimplementing the OOXML parsers or renderers.
 
 ## Upstream engine model
@@ -71,23 +71,29 @@ Upstream format entry points:
   PptxPresentation / PptxViewer / PptxScrollViewer
 ```
 
-`office-viewer` is an orchestration layer. The upstream engine owns parsing, layout, rendering, and format-specific interaction. The custom element owns source handling, lifecycle, status UI, and adapter selection.
+`office-viewer` is an **orchestration layer only**. The upstream engine owns parsing, layout, rendering, and format-specific interaction. The custom element owns only:
+- source handling and normalization
+- conservative format detection
+- lifecycle and cancellation
+- adapter selection and upstream viewer instantiation
+
+It does **not** own Shadow DOM, render containers, status UI, themes, or any visual chrome.
 
 ## Integration boundary
 
 ```text
-<office-viewer>
+<office-viewer>  (headless: no Shadow DOM, no children)
   |
   +-- source normalization
   +-- conservative format selection
   +-- cancellation and generation control
-  +-- Shadow DOM shell and status UI
-  +-- common events and verified commands
-  +-- resize handling
+  +-- lifecycle events (loadstart / ready / loaderror / destroy)
   |
   +-- DocxScrollViewer adapter
   +-- XlsxViewer adapter
   +-- PptxScrollViewer adapter
+        |
+        +-- exposed directly via getViewer() / getDocument() / getEngine()
 ```
 
 Do not create a second render worker. Configure the upstream viewer and use its worker lifecycle.
@@ -130,7 +136,7 @@ requestedMode: "worker" | "main"
 effectiveMode: "worker" | "main"
 ```
 
-Expose the effective mode publicly only if the upstream viewer makes it reliable and stable.
+Expose the effective mode via `get mode(): "worker" | "main" | null`.
 
 ### Worker requirements
 
@@ -229,7 +235,7 @@ Rules:
 - Caller buffers must not be detached or mutated unexpectedly.
 - Copy caller-owned buffers before transferring them to a worker.
 - Revoke only object URLs created by the component.
-- Retain the original source sufficiently for `downloadOriginal()`.
+- Retain the original source sufficiently for reload.
 
 A URL source is not equivalent to a local source for privacy: the browser contacts the URL origin when fetching it.
 
@@ -298,33 +304,29 @@ When reconnected, recreate the upstream viewer and reload the retained source wh
 
 ## Adapter contract
 
-The exact types must be based on current upstream declarations. The conceptual boundary is:
+Adapters are thin factories that instantiate upstream viewers. They do not wrap or abstract upstream APIs.
 
 ```ts
 interface ViewerAdapter {
   readonly format: OfficeFormat
-  readonly effectiveMode: "worker" | "main"
+  readonly viewer: DocxScrollViewer | XlsxViewer | PptxScrollViewer | null
+  readonly document: DocxDocument | XlsxWorkbook | PptxPresentation | null
+  readonly engine: unknown | null
 
   load(source: AdapterSource, options: AdapterLoadOptions): Promise<void>
   destroy(): void
-
-  setScale?(scale: number): void
-  fitWidth?(): void
-  fitPage?(): void
-  findText?(query: string): void
-  clearFind?(): void
 }
 ```
 
-Format-specific capabilities remain separate:
+The custom element exposes these directly:
 
-```text
-DOCX: page navigation and visible-page callbacks
-XLSX: sheet navigation, range/cell selection, workbook state
-PPTX: slide navigation and visible-slide callbacks
+```ts
+getViewer(): DocxScrollViewer | XlsxViewer | PptxScrollViewer | null
+getDocument(): DocxDocument | XlsxWorkbook | PptxPresentation | null
+getEngine(): unknown | null
 ```
 
-Do not expose parser models as part of the stable custom-element API.
+Do not expose parser models as part of the stable custom-element API beyond these accessors. Do not add wrapper methods for zoom, navigation, find, or download.
 
 ## Public API decisions
 
@@ -335,65 +337,49 @@ src
 file-name
 file-type
 mode="worker|main"
-theme
-zoom
-page
-slide
-sheet
-enable-text-selection
-enable-hyperlinks
-enable-download
-show-toolbar
+wasm-url
 ```
 
-`locale` is excluded. `print()` is excluded from the common API.
+No other attributes. No `zoom`, `page`, `slide`, `sheet`, `enable-*`, `theme`, `show-toolbar`, or `locale`.
 
 Initial methods:
 
 ```ts
 load(source: OfficeSource, options?: OfficeViewerLoadOptions): Promise<void>
 reload(): Promise<void>
-setScale(scale: number): void
-fitWidth(): void
-fitPage(): void
-findText(query: string): void
-clearFind(): void
-downloadOriginal(): Promise<void>
 destroy(): void
 ```
 
-`downloadOriginal()` downloads original source bytes only. It does not create a PDF, image, or modified Office file.
+Accessors:
+
+```ts
+getViewer(): DocxScrollViewer | XlsxViewer | PptxScrollViewer | null
+getDocument(): DocxDocument | XlsxWorkbook | PptxPresentation | null
+getEngine(): unknown | null
+get ready(): boolean
+get error(): Error | null
+get format(): OfficeFormat | null
+get mode(): 'worker' | 'main' | null
+```
+
+`downloadOriginal()` is **excluded**. Consumers implement download using the original source they provided.
+
+## Events
+
+Lifecycle-only, typed, small, serializable:
+
+```text
+loadstart
+ready
+loaderror
+destroy
+```
+
+No `pagechange`, `slidechange`, `sheetchange`, `zoomchange`, `progress`, or `find` events. Consumers attach listeners to the upstream viewer or engine returned by `getViewer()` / `getEngine()`.
 
 ## Styling
 
-Use an open Shadow DOM, but style only the component shell where useful:
-
-- background/desk;
-- page and slide gaps;
-- shadows;
-- status UI;
-- optional toolbar;
-- XLSX shell elements where the upstream surface allows it.
-
-Do not claim that authored document content can be themed. A Paper & Ink visual direction is optional inspiration, not an architectural dependency.
-
-The host must provide a bounded height:
-
-```css
-office-viewer {
-  display: block;
-  height: 100dvh;
-}
-```
-
-Required accessibility behavior:
-
-- `aria-busy` while loading;
-- accessible loading/error status;
-- labelled viewer region;
-- keyboard navigation where supported;
-- focus-visible styling;
-- clear fallback for unavailable Canvas/worker features.
+None. The component has no Shadow DOM and creates no DOM children. The host element itself may be styled by the consumer if desired (e.g., `display: contents` to make it layout-transparent).
 
 ## Optional renderer modules
 
@@ -486,10 +472,11 @@ Use Vitest and WebdriverIO as the primary test stack, matching `missing-elements
 - reload and replacement;
 - disconnect/reconnect;
 - permanent destroy;
-- resize/refit;
-- zoom and format-specific navigation;
-- find and hyperlinks;
-- original download;
+- **no DOM children created by the component**;
+- **no Shadow DOM**;
+- `getViewer()` returns expected upstream type;
+- `getDocument()` returns expected upstream type;
+- `getEngine()` returns expected upstream type;
 - malformed, encrypted, legacy, and unsupported files.
 
 ### Asset tests

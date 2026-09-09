@@ -2,8 +2,8 @@
 
 ## 1. Versioning
 - Use Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
-- Initial version is `0.0.0-spike`.
-- Upon first public release, this must advance to `1.0.0`.
+- Current version is `0.1.0`.
+- Upon first stable public release, advance to `1.0.0`.
 
 ## 2. Build Steps (The Release Pipeline)
 The following steps must be executed sequentially and validated at each stage:
@@ -34,6 +34,24 @@ The following steps must be executed sequentially and validated at each stage:
 
 ## 4. Hotfix Flow
 - For urgent bug fixes:
-    1.  Increment `PATCH` version in `package.json`.
+    1.  Increment `PATCH` version in `package.json` and update `CHANGELOG.md`.
     2.  Commit changes with a clear message referencing the fix.
-    3.  Run build and publish immediately. No full regression test suite is required unless the fix touches core APIs.
+    3.  Run `pnpm build`, `pnpm test`, and `pnpm test:build`.
+    4.  Publish immediately. No full regression test suite is required unless the fix touches core APIs.
+
+## 5. Automated smoke checklist
+
+Before every release, run:
+
+```bash
+pnpm install
+pnpm build
+pnpm test
+pnpm test:build
+```
+
+Verify:
+- `dist/office-viewer.es.js` exists.
+- `dist/types/index.d.ts` exists.
+- `dist/assets/` contains WASM and worker assets.
+- `dist/fixtures/` contains demo fixtures if the demo is bundled.

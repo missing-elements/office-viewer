@@ -8,16 +8,14 @@
 
 ## Vision
 
-Build a framework-neutral, read-only Web Component that renders Office Open XML documents directly in the browser without uploading files to a service and without embedding a full Office editor runtime.
+Build a **headless**, framework-neutral Web Component that provides direct access to `@silurus/ooxml` APIs without creating new UI, Shadow DOM, or abstracted viewer APIs. The component is an orchestration and lifecycle shell — it loads documents, manages upstream viewer instances, and exposes them directly to consumers.
 
 ## Current status snapshot
 
 - Milestone 0 spike is complete with validated upstream integration notes and asset checks.
-- Milestone 1 is complete with an initial `OfficeViewerElement` wrapper, loading/error states, and lifecycle hardening.
-- The wrapper now supports abort-aware `load(..., { signal })`, stale-request guards, and reconnect behavior for attribute-driven URL loads.
-- Milestone 2 is complete with XLSX/PPTX adapters, conservative format detection, binary source normalization, and format-specific events/navigation.
-- Milestone 3 has started with abort/stale-load protection and verified caller-owned binary buffer copying.
-- The custom-element API remains provisional until adapters and event semantics are fully hardened.
+- Milestone 1–3 built a full viewer component with Shadow DOM, status UI, and navigation.
+- **Plan revision**: pivot to headless-only scope. The component must strip all UI and expose upstream APIs directly.
+- Milestone 4 (API Stabilization) is complete: ESM bundle, TypeScript declarations, CDN/plain-module tests, documentation, and changelog are in place.
 
 ## Scope
 
@@ -37,7 +35,8 @@ Build a framework-neutral, read-only Web Component that renders Office Open XML 
 - Running embedded OLE applications.
 - Legacy binary formats such as `.doc`, `.xls`, and `.ppt`.
 - PowerPoint animations and transitions unless later supported by the upstream engine.
-- Printing in the initial common API.
+- Printing.
+- **Any UI: no Shadow DOM, no status indicators, no toolbars, no styles, no themes.**
 
 ## Core dependency
 
@@ -53,10 +52,13 @@ DOCX / XLSX / PPTX
 validated format-specific model
         |
         v
-Canvas renderer
+Canvas renderer (upstream viewers)
 ```
 
-`@missing-elements/office-viewer` is an orchestration and presentation layer around the upstream format-specific viewers. It must not duplicate their document models or parser logic.
+`@missing-elements/office-viewer` is an **orchestration layer only**. It must not:
+- duplicate upstream document models or parser logic
+- create new UI elements or visual chrome
+- wrap upstream viewer APIs with new method names or semantics
 
 ## Development stack
 
@@ -88,12 +90,24 @@ src/
     docx-adapter.ts
     xlsx-adapter.ts
     pptx-adapter.ts
-ui/
-  themes/
-    shell.css
 ```
 
-The custom element owns Shadow DOM, status UI, attributes, source resolution, adapter selection, common events, resize handling, and lifecycle. Adapters own format-specific upstream viewer instances.
+The custom element owns:
+- attribute parsing (`src`, `file-name`, `file-type`, `mode`, `wasm-url`)
+- source normalization and format detection
+- load lifecycle (generation tokens, abort, stale-load guards)
+- upstream viewer instantiation via adapters
+- reconnect and destroy semantics
+
+The custom element does **not** own:
+- Shadow DOM
+- render containers
+- status UI
+- CSS or themes
+- navigation methods (zoom, page, slide, sheet)
+- find, hyperlink, or download UI
+
+Adapters own format-specific upstream viewer instances and expose them directly.
 
 ## Upstream API study — mandatory first step
 
@@ -126,8 +140,6 @@ Use `DocxScrollViewer` where appropriate. DOCX is a paginated document and benef
 
 Use `XlsxViewer`. XLSX is not paginated. Preserve worksheet tabs, grid scrolling, cell/range selection, zoom, find, hyperlinks, frozen panes, and workbook-specific behavior.
 
-Do not expose page-oriented methods as if they applied to XLSX.
-
 ### PPTX
 
 Use `PptxScrollViewer` where appropriate. Preserve continuous slide scrolling, virtualization, slide navigation, zoom, find, text selection, hyperlinks, and any verified speaker-note capability.
@@ -143,7 +155,7 @@ mode="worker|main"
 - Worker mode is the default.
 - `mode="worker"` means prefer worker rendering.
 - `mode="main"` explicitly requests main-thread rendering.
-- If the upstream engine must fall back to main mode for compatibility, the component may do so and should make the effective mode observable internally.
+- If the upstream engine must fall back to main mode for compatibility, the component may do so and should make the effective mode observable via `getEngine().mode`.
 - There is no `auto` mode.
 - There is no `worker-required` option in the initial release.
 
@@ -171,7 +183,7 @@ type OfficeSource =
 
 Caller-owned buffers must not be detached or mutated unexpectedly. If transferables are used internally, copy the buffer before transferring it to a worker. Do not expose a transfer-ownership option initially.
 
-The component owns and revokes only object URLs that it creates. It must retain enough source information to implement `downloadOriginal()` and reload direct binary sources.
+The component owns and revokes only object URLs that it creates. It must retain enough source information to implement reload of direct binary sources.
 
 ## Format detection
 
@@ -193,50 +205,43 @@ src
 file-name
 file-type
 mode="worker|main"
-zoom
-page
-slide
-sheet
-enable-text-selection
-enable-hyperlinks
-enable-download
+wasm-url
 ```
 
-`locale` is intentionally excluded. Printing is intentionally excluded from the initial common API.
+No other attributes. No `zoom`, `page`, `slide`, `sheet`, `enable-*`, or `locale` attributes.
 
 Initial methods:
 
 ```ts
 load(source: OfficeSource, options?: OfficeViewerLoadOptions): Promise<void>
 reload(): Promise<void>
-setScale(scale: number): void
-fitWidth(): void
-fitPage(): void
-findText(query: string): void
-clearFind(): void
-downloadOriginal(): Promise<void>
 destroy(): void
 ```
 
-`downloadOriginal()` downloads the original source bytes only. It does not export PDF, images, or modified Office documents.
+Accessors — return upstream instances directly:
+
+```ts
+getDocument(): DocxDocument | XlsxWorkbook | PptxPresentation | null
+getViewer(): DocxScrollViewer | XlsxViewer | PptxScrollViewer | null
+getEngine(): unknown | null  // typed union when upstream exports improve
+get ready(): boolean
+get error(): Error | null
+get format(): OfficeFormat | null
+get mode(): 'worker' | 'main' | null
+```
 
 The exact `wasmUrl` type must match the current upstream declarations. Expose `wasmUrl` only if verified. Do not expose `workerUrl` in the initial release.
 
-Initial events:
+Initial events — minimal, lifecycle-only:
 
 ```text
 loadstart
-progress
-ready
 loaderror
-pagechange
-slidechange
-sheetchange
-zoomchange
+ready
 destroy
 ```
 
-Events must be typed, small, and serializable. Format-specific operations remain adapter-specific unless their semantics are truly common.
+Events must be typed, small, and serializable. No `pagechange`, `slidechange`, `sheetchange`, `zoomchange`, or `progress` events. Consumers attach listeners to the upstream viewer or engine returned by `getViewer()` / `getEngine()`.
 
 ## Lifecycle
 
@@ -266,7 +271,6 @@ Do not enable optional renderers by default:
 - TIFF decoding
 
 Add public configuration only after verifying upstream types and worker-mode behavior. Optional assets must not be fetched for documents that do not need them.
-
 
 ## Bundle and asset strategy
 
@@ -317,11 +321,10 @@ Use Vitest and WebdriverIO as the primary test stack.
 - reload and replacement;
 - disconnect/reconnect;
 - permanent destroy;
-- resize and refit;
-- zoom and navigation;
-- find and hyperlinks;
-- theme/shell behavior;
-- original download;
+- no DOM children created by the component;
+- no Shadow DOM;
+- `getViewer()` returns expected upstream type;
+- `getDocument()` returns expected upstream type;
 - malformed, encrypted, legacy, and unsupported input.
 
 ### Asset tests
@@ -350,7 +353,7 @@ images.pptx
 
 ## Milestones
 
-### Milestone 0 — Architecture spike
+### Milestone 0 — Architecture spike (complete)
 
 - Complete the upstream API study.
 - Create `docs/ooxml-integration-notes.md`.
@@ -361,24 +364,22 @@ images.pptx
 - Measure per-format bundle/runtime costs.
 - Record all upstream pitfalls.
 
-Do not finalize the custom-element API before this milestone is complete.
+### Milestone 1 — Headless component skeleton
 
-### Milestone 1 — Minimal DOCX component (complete)
-
-- Create package skeleton.
-- Implement Shadow DOM and bounded container.
+- Strip Shadow DOM, status UI, and render container from existing `OfficeViewerElement`.
 - Implement source loading and lifecycle state.
 - Add DOCX adapter using worker mode by default.
-- Add loading/error states.
+- Add loading/error states via events only, no DOM.
 - Add disconnect/reconnect and destroy behavior.
-- Add initial browser tests.
+- Add `getDocument()`, `getViewer()`, `getEngine()` accessors.
+- Add initial browser tests asserting zero DOM children.
 
 ### Milestone 2 — XLSX and PPTX
 
 - Add XLSX and PPTX adapters.
 - Add conservative format detection.
 - Add binary source types.
-- Add common events and format-specific navigation.
+- Expose upstream viewers directly without wrapper methods.
 
 ### Milestone 3 — Lifecycle and asset hardening
 
@@ -388,19 +389,10 @@ Do not finalize the custom-element API before this milestone is complete.
 - Verify WASM override if supported.
 - Test static hosting, Vite, plain modules, and supported framework bundlers.
 
-### Milestone 4 — Verified interactions
-
-- Add zoom and fit.
-- Add find and hyperlinks.
-- Add page/slide/sheet events.
-- Add `downloadOriginal()`.
-- Do not add common printing until separately verified.
-
-
-### Milestone 5 — Production release
+### Milestone 4 — API stabilization
 
 - Finalize exports and declarations.
-- Complete browser and visual tests.
+- Complete browser tests.
 - Publish bundle-size measurements.
 - Complete documentation and troubleshooting guidance.
 - Add changelog and release workflow.
@@ -416,11 +408,19 @@ A user can write:
 <office-viewer
   src="./report.docx"
   mode="worker"
-  style="height: 100dvh">
+  style="display: contents">
 </office-viewer>
+
+<script>
+  const el = document.querySelector('office-viewer');
+  await el.load('./report.docx');
+  const viewer = el.getViewer(); // DocxScrollViewer
+  viewer.setScale(1.5);
+  viewer.onVisiblePageChange = (i, total) => console.log(i, total);
+</script>
 ```
 
-and receive a private, browser-rendered, read-only Office viewer with no server, upload service, ONLYOFFICE runtime, editor UI, PDF.js dependency, or manual extraction.
+and receive a headless, browser-rendered Office document orchestrator with no server, upload service, ONLYOFFICE runtime, editor UI, PDF.js dependency, manual extraction, **and no component-generated UI**.
 
 For local `File`, `Blob`, and binary sources, the component processes bytes locally and does not upload them. URL sources are fetched from the URL supplied by the consumer.
 

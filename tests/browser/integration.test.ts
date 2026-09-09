@@ -1,179 +1,184 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { defineOfficeViewerElement, OoxmlIntegrationSpike, SAMPLE_FIXTURES, type OfficeViewerElement } from '../../src'
+import { defineOfficeViewerElement, type OfficeViewerElement } from '../../src'
+
+const SAMPLE_FIXTURES = {
+  docx: '/fixtures/sample.docx',
+  xlsx: '/fixtures/sample.xlsx',
+  pptx: '/fixtures/sample.pptx'
+}
 
 const supportsCustomElementWrapper = detectCustomElementWrapperSupport()
 
-describe('browser integration spike', () => {
+describe('browser integration', () => {
   let container: HTMLDivElement
-  let harness: OoxmlIntegrationSpike
 
   beforeEach(() => {
     container = document.createElement('div')
     container.style.width = '1024px'
     container.style.height = '768px'
     document.body.append(container)
-    harness = new OoxmlIntegrationSpike(container)
   })
 
   afterEach(() => {
-    harness.destroy()
+    container.replaceChildren()
     container.remove()
   })
 
-  it('loads the representative fixtures in worker mode by default', async () => {
-    const docxResult = await harness.load(SAMPLE_FIXTURES.docx, { format: 'docx' })
-    expect(docxResult.requestedMode).toBe('worker')
-    expect(['worker', 'main']).toContain(docxResult.effectiveMode)
-
-    const xlsxResult = await harness.load(SAMPLE_FIXTURES.xlsx, { format: 'xlsx' })
-    expect(xlsxResult.totalCount).toBeGreaterThanOrEqual(1)
-    expect(xlsxResult.sheetNames?.length).toBeGreaterThanOrEqual(1)
-
-    const pptx = await harness.load(SAMPLE_FIXTURES.pptx, { format: 'pptx' })
-    expect(pptx.totalCount).toBeGreaterThanOrEqual(1)
-    expect(['worker', 'main']).toContain(pptx.effectiveMode)
-  })
-
-  it('supports main mode and File inputs', async () => {
-    const response = await fetch(SAMPLE_FIXTURES.docx)
-    const file = new File([await response.arrayBuffer()], 'sample.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
-    const result = await harness.load(file, { mode: 'main' })
-
-    expect(result.sourceKind).toBe('file')
-    expect(result.requestedMode).toBe('main')
-    expect(result.effectiveMode).toBe('main')
-  })
-
-  it('reloads cleanly and can be reused after destroy', async () => {
-    const first = await harness.load(SAMPLE_FIXTURES.docx, { format: 'docx' })
-    const reloaded = await harness.reload()
-    
-    expect(reloaded.generation).toBeGreaterThan(first.generation)
-    expect(container.childElementCount).toBeGreaterThan(0)
-
-    harness.destroy()
-    expect(container.childElementCount).toBe(0)
-
-    const second = await harness.load(SAMPLE_FIXTURES.xlsx, { format: 'xlsx' })
-    expect(second.format).toBe('xlsx')
-    expect(container.childElementCount).toBeGreaterThan(0)
-  })
-
-  it('supports findText and clearFind functionality on DOCX', async () => {
-    await harness.load(SAMPLE_FIXTURES.docx, { format: 'docx' })
-    const element = document.createElement('office-viewer') as OfficeViewerElement
-    element.style.width = '100%'
-    element.style.height = '100%'
-    container.appendChild(element)
-
-    // Test findText
-    const searchResults = await (element as any).findText('sample text', { caseSensitive: false })
-    expect(searchResults.length).toBeGreaterThan(0)
-    expect(searchResults[0].pageNumber).toBeGreaterThanOrEqual(1)
-    
-    // Test interaction after finding
-    await element.goToPage(searchResults[0].pageNumber)
-    
-    // Test clearFind
-    await (element as any).clearFind()
-    
-    // Re-run search to ensure find state is clean (optional check)
-    const nextSearchResults = await (element as any).findText('sample text', { caseSensitive: false })
-    expect(nextSearchResults.length).toBeGreaterThan(0)
-
-    // Clean up
-    element.destroy()
-    container.removeChild(element)
-  })
-
-  it('supports selectRange functionality on XLSX', async () => {
-    await harness.load(SAMPLE_FIXTURES.xlsx, { format: 'xlsx' })
-    const element = document.createElement('office-viewer') as OfficeViewerElement
-    element.style.width = '100%';
-    element.style.height = '100%';
-    container.appendChild(element);
-
-    // Test selection - attempt call despite potential type assertion bypass
-    (element as any).selectRange('A1:B2')
-    
-    // Verification is hard without knowing internal state, but we check if the call succeeds
-    
-    // Clean up
-    element.destroy()
-    container.removeChild(element)
-  })
-
-
-  it('surfaces a useful malformed-input diagnostic', async () => {
-    await expect(
-      harness.load('/fixtures/malformed.docx', { format: 'docx', mode: 'main' })
-    ).rejects.toThrowError()
-
-    const summary = harness.getSummary()
-    expect(summary?.lastError?.name).toBeTruthy()
-    expect(summary?.lastError?.message.length).toBeGreaterThan(0)
-    expect(summary?.diagnostics.at(-1)?.length).toBeGreaterThan(0)
-  })
-
-  it.skipIf(!supportsCustomElementWrapper)('supports the custom-element wrapper API for the same fixture path', async () => {
+  it.skipIf(!supportsCustomElementWrapper)('creates zero DOM children and no Shadow DOM', async () => {
     defineOfficeViewerElement()
 
     const element = document.createElement('office-viewer') as OfficeViewerElement
-    element.style.width = '100%';
-    element.style.height = '100%';
     container.append(element)
 
-    const progressEvents: Event[] = []
-    const pageChangeEvents: Event[] = []
-    element.addEventListener('progress', (event) => {
-      progressEvents.push(event)
-    })
-    element.addEventListener('pagechange', (event) => {
-      pageChangeEvents.push(event)
-    })
+    expect(element.shadowRoot).toBeNull()
+    expect(element.childNodes.length).toBe(0)
 
-    const result = await element.load(SAMPLE_FIXTURES.docx, { format: 'docx' })
-    expect(result.format).toBe('docx')
-    expect(element.getSummary()?.format).toBe('docx')
-    expect(progressEvents.length).toBeGreaterThan(0)
-    expect(pageChangeEvents.length).toBeGreaterThan(0)
-    expect(typeof element.goToPage(0)).toBe('boolean')
+    await element.load(SAMPLE_FIXTURES.docx, { format: 'docx' })
 
-    const viewport = (element.shadowRoot ?? element).querySelector<HTMLElement>('[part="viewport"]')
-    expect(viewport).toBeTruthy()
-    expect(viewport?.childElementCount ?? 0).toBeGreaterThan(0)
+    expect(element.shadowRoot).toBeNull()
+    expect(element.childNodes.length).toBe(0)
+    expect(container.contains(element)).toBe(true)
 
     element.destroy()
-    expect(viewport?.childElementCount ?? 0).toBe(0)
   })
 
-  it.skipIf(!supportsCustomElementWrapper)('emits sheet and slide change events for xlsx and pptx loads', async () => {
+  it.skipIf(!supportsCustomElementWrapper)('loads DOCX from a URL and exposes upstream instances', async () => {
     defineOfficeViewerElement()
 
     const element = document.createElement('office-viewer') as OfficeViewerElement
-    element.style.width = '100%'
-    element.style.height = '100%'
-    container.appendChild(element)
+    container.append(element)
 
-    let sheetChangeCount = 0
-    let slideChangeCount = 0
-    element.addEventListener('sheetchange', () => {
-      sheetChangeCount += 1
+    await element.load(SAMPLE_FIXTURES.docx, { format: 'docx' })
+
+    expect(element.format).toBe('docx')
+    expect(element.ready).toBe(true)
+    expect(element.mode).toBeOneOf(['worker', 'main'])
+    expect(typeof (element.getDocument() as Record<string, unknown>)?.destroy).toBe('function')
+    expect(typeof (element.getViewer() as Record<string, unknown>)?.pageCount).toBe('number')
+    expect(typeof (element.getEngine() as Record<string, unknown>)?.destroy).toBe('function')
+
+    element.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('loads XLSX from a URL and exposes upstream instances', async () => {
+    defineOfficeViewerElement()
+
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(element)
+
+    await element.load(SAMPLE_FIXTURES.xlsx, { format: 'xlsx' })
+
+    expect(element.format).toBe('xlsx')
+    expect(element.ready).toBe(true)
+    expect(element.mode).toBeOneOf(['worker', 'main'])
+    expect(Array.isArray((element.getDocument() as Record<string, unknown>)?.sheetNames)).toBe(true)
+    expect(typeof (element.getViewer() as Record<string, unknown>)?.sheetCount).toBe('number')
+    expect(Array.isArray((element.getEngine() as Record<string, unknown>)?.sheetNames)).toBe(true)
+
+    element.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('loads PPTX from a URL and exposes upstream instances', async () => {
+    defineOfficeViewerElement()
+
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(element)
+
+    await element.load(SAMPLE_FIXTURES.pptx, { format: 'pptx' })
+
+    expect(element.format).toBe('pptx')
+    expect(element.ready).toBe(true)
+    expect(element.mode).toBeOneOf(['worker', 'main'])
+    expect(typeof (element.getDocument() as Record<string, unknown>)?.destroy).toBe('function')
+    expect(typeof (element.getViewer() as Record<string, unknown>)?.slideCount).toBe('number')
+    expect(typeof (element.getEngine() as Record<string, unknown>)?.destroy).toBe('function')
+
+    element.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('loads File sources in main mode', async () => {
+    defineOfficeViewerElement()
+
+    const response = await fetch(SAMPLE_FIXTURES.docx)
+    const file = new File([await response.arrayBuffer()], 'sample.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     })
-    element.addEventListener('slidechange', () => {
-      slideChangeCount += 1
-    })
 
-    const xlsx = await element.load(SAMPLE_FIXTURES.xlsx, { format: 'xlsx' })
-    expect(xlsx.format).toBe('xlsx')
-    expect(sheetChangeCount).toBeGreaterThan(0)
-    expect(typeof element.goToSheet(0)).toBe('boolean')
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(element)
 
-    const pptx = await element.load(SAMPLE_FIXTURES.pptx, { format: 'pptx' })
-    expect(pptx.format).toBe('pptx')
-    expect(slideChangeCount).toBeGreaterThan(0)
-    expect(typeof element.goToSlide(0)).toBe('boolean')
+    await element.load(file, { mode: 'main' })
+
+    expect(element.format).toBe('docx')
+    expect(element.mode).toBe('main')
+
+    element.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('loads Blob, ArrayBuffer, and Uint8Array sources', async () => {
+    defineOfficeViewerElement()
+
+    const response = await fetch(SAMPLE_FIXTURES.xlsx)
+    const buffer = await response.arrayBuffer()
+
+    const blob = new Blob([buffer])
+    const blobElement = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(blobElement)
+    await blobElement.load(blob, { format: 'xlsx', mode: 'main' })
+    expect(blobElement.format).toBe('xlsx')
+    blobElement.destroy()
+
+    const arrayBufferElement = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(arrayBufferElement)
+    await arrayBufferElement.load(buffer, { format: 'xlsx', mode: 'main' })
+    expect(arrayBufferElement.format).toBe('xlsx')
+    arrayBufferElement.destroy()
+
+    const uint8ArrayElement = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(uint8ArrayElement)
+    await uint8ArrayElement.load(new Uint8Array(buffer), { format: 'xlsx', mode: 'main' })
+    expect(uint8ArrayElement.format).toBe('xlsx')
+    uint8ArrayElement.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('does not mutate caller-owned ArrayBuffer or Uint8Array', async () => {
+    defineOfficeViewerElement()
+
+    const response = await fetch(SAMPLE_FIXTURES.docx)
+    const buffer = await response.arrayBuffer()
+    const originalBytes = new Uint8Array(buffer).slice()
+
+    const arrayBufferElement = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(arrayBufferElement)
+    await arrayBufferElement.load(buffer, { format: 'docx', mode: 'main' })
+    expect(new Uint8Array(buffer)).toEqual(originalBytes)
+    arrayBufferElement.destroy()
+
+    const view = new Uint8Array(buffer)
+    const uint8ArrayElement = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(uint8ArrayElement)
+    await uint8ArrayElement.load(view, { format: 'docx', mode: 'main' })
+    expect(view).toEqual(originalBytes)
+    uint8ArrayElement.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('reloads cleanly and destroy clears state', async () => {
+    defineOfficeViewerElement()
+
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(element)
+
+    await element.load(SAMPLE_FIXTURES.docx, { format: 'docx' })
+    expect(element.format).toBe('docx')
+
+    await element.reload()
+    expect(element.format).toBe('docx')
+
+    element.destroy()
+    expect(element.format).toBeNull()
+    expect(element.ready).toBe(false)
+    expect(element.getViewer()).toBeNull()
   })
 
   it.skipIf(!supportsCustomElementWrapper)('reconnects and reloads src-driven content after disconnect', async () => {
@@ -182,27 +187,61 @@ describe('browser integration spike', () => {
     const element = document.createElement('office-viewer') as OfficeViewerElement
     element.setAttribute('src', SAMPLE_FIXTURES.docx)
     element.setAttribute('file-type', 'docx')
-    element.style.width = '100%'
-    element.style.height = '100%'
 
     container.append(element)
     await waitForEvent(element, 'ready')
 
-    expect(element.getSummary()?.format).toBe('docx')
+    expect(element.format).toBe('docx')
 
     element.remove()
     container.append(element)
 
     await waitForEvent(element, 'ready')
-    expect(element.getSummary()?.format).toBe('docx')
+    expect(element.format).toBe('docx')
+
+    element.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('observes effective mode on the engine', async () => {
+    defineOfficeViewerElement()
+
+    const workerElement = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(workerElement)
+    await workerElement.load(SAMPLE_FIXTURES.docx, { format: 'docx' })
+    expect(workerElement.mode).toBeOneOf(['worker', 'main'])
+    const engineMode = (workerElement.getEngine() as Record<string, unknown> | null)?.mode
+    expect(engineMode).toBe(workerElement.mode)
+    workerElement.destroy()
+
+    const mainElement = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(mainElement)
+    await mainElement.load(SAMPLE_FIXTURES.docx, { format: 'docx', mode: 'main' })
+    expect(mainElement.mode).toBe('main')
+    mainElement.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('aborts an in-flight load when superseded by a newer load', async () => {
+    defineOfficeViewerElement()
+
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(element)
+
+    const first = element.load(SAMPLE_FIXTURES.docx, { format: 'docx', mode: 'main' })
+    const second = element.load(SAMPLE_FIXTURES.xlsx, { format: 'xlsx', mode: 'main' })
+
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' })
+    await second
+
+    expect(element.format).toBe('xlsx')
+    expect(element.ready).toBe(true)
+
+    element.destroy()
   })
 
   it.skipIf(!supportsCustomElementWrapper)('supports canceling an externally aborted load request', async () => {
     defineOfficeViewerElement()
 
     const element = document.createElement('office-viewer') as OfficeViewerElement
-    element.style.width = '100%'
-    element.style.height = '100%'
     container.append(element)
 
     const controller = new AbortController()
@@ -215,13 +254,148 @@ describe('browser integration spike', () => {
       })
     ).rejects.toMatchObject({ name: 'AbortError' })
   })
+
+  it.skipIf(!supportsCustomElementWrapper)('surfaces a useful malformed-input diagnostic', async () => {
+    defineOfficeViewerElement()
+
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(element)
+
+    let capturedError: Error | null = null
+    element.addEventListener('loaderror', (event) => {
+      capturedError = (event as CustomEvent).detail.error
+    })
+
+    await expect(element.load('/fixtures/malformed.docx', { format: 'docx', mode: 'main' })).rejects.toThrowError()
+    expect(capturedError).toBeTruthy()
+
+    element.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('fails clearly for unsupported formats', async () => {
+    defineOfficeViewerElement()
+
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(element)
+
+    let capturedError: Error | null = null
+    element.addEventListener('loaderror', (event) => {
+      capturedError = (event as CustomEvent).detail.error
+    })
+
+    await expect(element.load('/fixtures/report.pdf', { format: 'pdf' as unknown as 'docx' })).rejects.toThrowError()
+    expect(capturedError).toBeTruthy()
+
+    element.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('fails clearly for binary sources without format', async () => {
+    defineOfficeViewerElement()
+
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(element)
+
+    let capturedError: Error | null = null
+    element.addEventListener('loaderror', (event) => {
+      capturedError = (event as CustomEvent).detail.error
+    })
+
+    await expect(element.load(new Uint8Array([1, 2, 3]))).rejects.toThrowError()
+    expect(capturedError).toBeTruthy()
+
+    element.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('accepts a custom wasm-url option', async () => {
+    defineOfficeViewerElement()
+
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(element)
+
+    let capturedError: Error | null = null
+    element.addEventListener('loaderror', (event) => {
+      capturedError = (event as CustomEvent).detail.error
+    })
+
+    await expect(
+      element.load(SAMPLE_FIXTURES.docx, {
+        format: 'docx',
+        mode: 'main',
+        wasmUrl: '/fixtures/fake-wasm/does-not-exist.wasm'
+      })
+    ).rejects.toThrowError()
+    expect(capturedError).toBeTruthy()
+
+    element.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('accepts a custom wasm-url attribute', async () => {
+    defineOfficeViewerElement()
+
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    element.setAttribute('wasm-url', '/fixtures/fake-wasm/does-not-exist.wasm')
+    element.setAttribute('src', SAMPLE_FIXTURES.docx)
+    element.setAttribute('file-type', 'docx')
+    element.setAttribute('mode', 'main')
+    container.append(element)
+
+    let capturedError: Error | null = null
+    element.addEventListener('loaderror', (event) => {
+      capturedError = (event as CustomEvent).detail.error
+    })
+
+    await expect(waitForEvent(element, 'loaderror', 5000)).resolves.toBeDefined()
+    expect(capturedError).toBeTruthy()
+
+    element.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('loads when imported as a plain module from a CDN-like relative URL', async () => {
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(element)
+
+    // Simulate the plain-module consumer path: the element class is available
+    // on the global namespace after an ESM import, and `load()` is invoked directly.
+    if (!customElements.get('office-viewer')) {
+      defineOfficeViewerElement()
+    }
+
+    await element.load(SAMPLE_FIXTURES.pptx, { format: 'pptx', mode: 'main' })
+
+    expect(element.format).toBe('pptx')
+    expect(element.ready).toBe(true)
+    expect(typeof (element.getViewer() as Record<string, unknown>)?.slideCount).toBe('number')
+
+    element.destroy()
+  })
+
+  it.skipIf(!supportsCustomElementWrapper)('does not expose internal render container as a child', async () => {
+    defineOfficeViewerElement()
+
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    container.append(element)
+
+    await element.load(SAMPLE_FIXTURES.xlsx, { format: 'xlsx', mode: 'main' })
+
+    expect(element.shadowRoot).toBeNull()
+    expect(element.childNodes.length).toBe(0)
+
+    element.destroy()
+  })
 })
 
 function detectCustomElementWrapperSupport(): boolean {
   try {
     defineOfficeViewerElement()
     const element = document.createElement('office-viewer') as Partial<OfficeViewerElement>
-    return typeof element.load === 'function' && typeof element.getSummary === 'function' && typeof element.destroy === 'function'
+    return (
+      typeof element.load === 'function'
+      && typeof element.reload === 'function'
+      && typeof element.destroy === 'function'
+      && typeof element.getViewer === 'function'
+      && typeof element.getDocument === 'function'
+      && typeof element.getEngine === 'function'
+    )
   } catch {
     return false
   }

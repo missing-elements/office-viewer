@@ -1,46 +1,55 @@
-import type { RetainedLoad } from '../ooxml-spike'
-import type { AdapterLoadHooks, LoadedAdapter } from './adapter-types'
-import { invokeViewerMethod } from '../viewer-adapter'
+import type { AdapterLoadOptions, AdapterSource, ViewerAdapter } from './adapter-types'
 
-export async function loadPptxAdapter(retainedLoad: RetainedLoad, container: HTMLElement, hooks: AdapterLoadHooks): Promise<LoadedAdapter> {
-  const { PptxPresentation, PptxScrollViewer } = await import('@silurus/ooxml/pptx')
-  const engine = await PptxPresentation.load(cloneRetainedSource(retainedLoad), {
-    mode: retainedLoad.options.mode ?? 'worker',
-    wasmUrl: retainedLoad.options.wasmUrl,
-    progressiveLayout: true
-  })
+export async function createPptxAdapter(): Promise<ViewerAdapter> {
+  const pptx = await import('@silurus/ooxml/pptx')
 
-  const viewer = PptxScrollViewer.fromPresentation(container, engine, {
-    enableHyperlinks: true,
-    enableTextSelection: true,
-    onVisibleSlideChange: (topIndex, total, layoutComplete) => {
-      hooks.onSummaryUpdate({
-        currentIndex: topIndex,
-        totalCount: total,
-        layoutComplete
-      })
-    },
-    onError: (error) => {
-      hooks.onError(error)
-    }
-  })
-
-  hooks.onSummaryUpdate({
-    currentIndex: viewer.topVisibleSlide,
-    totalCount: viewer.slideCount,
-    layoutComplete: viewer.layoutComplete
-  })
+  let engine: Awaited<ReturnType<typeof pptx.PptxPresentation.load>> | null = null
+  let viewer: ReturnType<typeof pptx.PptxScrollViewer.fromPresentation> | null = null
 
   return {
-    engine,
-    viewer
+    format: 'pptx',
+    get viewer() {
+      return viewer
+    },
+    get document() {
+      return engine
+    },
+    get engine() {
+      return engine
+    },
+    async load(source: AdapterSource, options: AdapterLoadOptions): Promise<void> {
+      const wasmUrl = normalizeWasmUrl(options.wasmUrl)
+      engine = await pptx.PptxPresentation.load(source.source, {
+        mode: options.mode ?? 'worker',
+        wasmUrl
+      })
+      const container = options.container ?? createDetachedContainer()
+      viewer = pptx.PptxScrollViewer.fromPresentation(container, engine)
+    },
+    destroy(): void {
+      viewer?.destroy()
+      engine?.destroy()
+      viewer = null
+      engine = null
+    }
   }
 }
 
-export function navigatePptxViewer(viewer: { destroy(): void }, targetIndex: number): boolean {
-  return invokeViewerMethod(viewer, ['scrollToSlide', 'goToSlide', 'setSlideIndex', 'setVisibleSlideIndex'], targetIndex)
+function normalizeWasmUrl(wasmUrl: string | URL | undefined): string | undefined {
+  if (wasmUrl instanceof URL) {
+    return wasmUrl.toString()
+  }
+  return wasmUrl
 }
 
-function cloneRetainedSource(retainedLoad: RetainedLoad): string | ArrayBuffer {
-  return typeof retainedLoad.source === 'string' ? retainedLoad.source : retainedLoad.source.slice(0)
+function createDetachedContainer(): HTMLElement {
+  if (typeof document === 'undefined') {
+    throw new Error('A document is required to create a viewer container.')
+  }
+
+  const container = document.createElement('div')
+  container.style.width = '100%'
+  container.style.height = '100%'
+  container.style.overflow = 'auto'
+  return container
 }

@@ -1,53 +1,55 @@
-import type { RetainedLoad } from '../ooxml-spike'
-import type { AdapterLoadHooks, LoadedAdapter } from './adapter-types'
-import { invokeViewerMethod } from '../viewer-adapter'
+import type { AdapterLoadOptions, AdapterSource, ViewerAdapter } from './adapter-types'
 
-export async function loadXlsxAdapter(retainedLoad: RetainedLoad, container: HTMLElement, hooks: AdapterLoadHooks): Promise<LoadedAdapter> {
-  const { XlsxViewer, XlsxWorkbook } = await import('@silurus/ooxml/xlsx')
-  const engine = await XlsxWorkbook.load(cloneRetainedSource(retainedLoad), {
-    mode: retainedLoad.options.mode ?? 'worker',
-    wasmUrl: retainedLoad.options.wasmUrl
-  })
+export async function createXlsxAdapter(): Promise<ViewerAdapter> {
+  const xlsx = await import('@silurus/ooxml/xlsx')
 
-  const viewer = XlsxViewer.fromWorkbook(container, engine, {
-    enableHyperlinks: true,
-    onReady: (sheetNames) => {
-      hooks.onSummaryUpdate({
-        currentIndex: 0,
-        totalCount: sheetNames.length,
-        layoutComplete: true,
-        sheetNames: [...sheetNames]
-      })
-    },
-    onSheetChange: (index, total) => {
-      hooks.onSummaryUpdate({
-        currentIndex: index,
-        totalCount: total,
-        layoutComplete: true
-      })
-    },
-    onError: (error) => {
-      hooks.onError(error)
-    }
-  })
-
-  hooks.onSummaryUpdate({
-    currentIndex: viewer.sheetIndex,
-    totalCount: viewer.sheetCount,
-    layoutComplete: true,
-    sheetNames: [...viewer.sheetNames]
-  })
+  let engine: Awaited<ReturnType<typeof xlsx.XlsxWorkbook.load>> | null = null
+  let viewer: ReturnType<typeof xlsx.XlsxViewer.fromWorkbook> | null = null
 
   return {
-    engine,
-    viewer
+    format: 'xlsx',
+    get viewer() {
+      return viewer
+    },
+    get document() {
+      return engine
+    },
+    get engine() {
+      return engine
+    },
+    async load(source: AdapterSource, options: AdapterLoadOptions): Promise<void> {
+      const wasmUrl = normalizeWasmUrl(options.wasmUrl)
+      engine = await xlsx.XlsxWorkbook.load(source.source, {
+        mode: options.mode ?? 'worker',
+        wasmUrl
+      })
+      const container = options.container ?? createDetachedContainer()
+      viewer = xlsx.XlsxViewer.fromWorkbook(container, engine)
+    },
+    destroy(): void {
+      viewer?.destroy()
+      engine?.destroy()
+      viewer = null
+      engine = null
+    }
   }
 }
 
-export function navigateXlsxViewer(viewer: { destroy(): void }, targetIndex: number): boolean {
-  return invokeViewerMethod(viewer, ['setSheetIndex', 'goToSheet', 'showSheet', 'setActiveSheetIndex'], targetIndex)
+function normalizeWasmUrl(wasmUrl: string | URL | undefined): string | undefined {
+  if (wasmUrl instanceof URL) {
+    return wasmUrl.toString()
+  }
+  return wasmUrl
 }
 
-function cloneRetainedSource(retainedLoad: RetainedLoad): string | ArrayBuffer {
-  return typeof retainedLoad.source === 'string' ? retainedLoad.source : retainedLoad.source.slice(0)
+function createDetachedContainer(): HTMLElement {
+  if (typeof document === 'undefined') {
+    throw new Error('A document is required to create a viewer container.')
+  }
+
+  const container = document.createElement('div')
+  container.style.width = '100%'
+  container.style.height = '100%'
+  container.style.overflow = 'auto'
+  return container
 }

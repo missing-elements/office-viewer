@@ -1,21 +1,33 @@
 {
   "name": "@missing-elements/office-viewer",
-  "version": "0.0.0-spike",
-  "private": true,
-  "description": "Architecture spike for browser-based OOXML viewing with @silurus/ooxml.",
+  "version": "0.1.0",
+  "description": "Headless Web Component orchestration layer for browser-based OOXML viewing with @silurus/ooxml.",
   "type": "module",
   "license": "MIT",
+  "main": "./dist/office-viewer.es.js",
+  "module": "./dist/office-viewer.es.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/office-viewer.es.js",
+      "default": "./dist/office-viewer.es.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
-    "build": "pnpm typecheck && vite build",
+    "build": "pnpm typecheck && vite build && tsc --emitDeclarationOnly",
     "test": "pnpm test:unit && pnpm test:browser",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:build": "vitest run --config vitest.build.config.ts",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
-    "build:cdn": "echo 'Simulating CDN build process...' && exit 0",
-    "build:plain-module": "echo 'Simulating plain-module build process...' && exit 0"
+    "build:cdn": "pnpm build",
+    "build:plain-module": "pnpm build"
   },
   "dependencies": {
     "@silurus/ooxml": "0.85.3"
