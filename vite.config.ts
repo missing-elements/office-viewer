@@ -5,10 +5,13 @@ const rootDir = import.meta.dirname
 
 export default defineConfig({
   base: './',
+  root: resolve(rootDir, 'demo'),
+  publicDir: resolve(rootDir, 'public'),
   server: {
     host: '127.0.0.1',
     port: 5173,
-    strictPort: true
+    strictPort: true,
+    open: true
   },
   build: {
     lib: {

@@ -1,21 +1,19 @@
+import { DocxScrollViewer } from '@silurus/ooxml/docx'
+import { PptxScrollViewer } from '@silurus/ooxml/pptx'
+import { XlsxViewer } from '@silurus/ooxml/xlsx'
 import type {
   OfficeFormat,
   OfficeSource,
-  OfficeViewerLoadErrorEventDetail,
   OfficeViewerLoadOptions,
   OfficeViewerMode,
-  OfficeViewerReadyEventDetail
+  OfficeViewerStatus
 } from './types'
-import { resolveOfficeSource } from './source-resolver'
-import { LoadController } from './load-controller'
-import type { ViewerAdapter } from './viewers/adapter-types'
-import { createDocxAdapter, createPptxAdapter, createXlsxAdapter } from './viewers'
 
 export const OFFICE_VIEWER_TAG_NAME = 'office-viewer'
 
-const RELOAD_ATTRIBUTE_NAMES = new Set(['src', 'file-name', 'file-type', 'mode', 'wasm-url'])
+export type OfficeViewer = DocxScrollViewer | XlsxViewer | PptxScrollViewer
 
-type LifecycleState = 'idle' | 'loading' | 'ready' | 'error' | 'detached' | 'destroyed'
+const RELOAD_ATTRIBUTE_NAMES = new Set(['src', 'file-type', 'mode', 'wasm-url'])
 
 if (typeof globalThis.HTMLElement === 'undefined') {
   ;(globalThis as { HTMLElement: typeof HTMLElement }).HTMLElement = class {} as typeof HTMLElement
@@ -23,16 +21,18 @@ if (typeof globalThis.HTMLElement === 'undefined') {
 
 export class OfficeViewerElement extends HTMLElement {
   static get observedAttributes(): string[] {
-    return ['src', 'file-name', 'file-type', 'mode', 'wasm-url']
+    return ['src', 'file-type', 'mode', 'wasm-url']
   }
 
-  private loadController = new LoadController()
-  private lifecycleState: LifecycleState = 'idle'
-  private adapter: ViewerAdapter | null = null
+  static readonly tagName = OFFICE_VIEWER_TAG_NAME
+  static readonly shadowRootMode: ShadowRootMode = 'open'
+
+  private viewer: OfficeViewer | null = null
+  private status: OfficeViewerStatus = 'idle'
+  private lastError: Error | null = null
   private retainedSource: OfficeSource | null = null
   private retainedOptions: OfficeViewerLoadOptions | null = null
-  private lastError: Error | null = null
-  private renderContainer: HTMLElement | null = null
+  private abortController: AbortController | null = null
 
   get src(): string | null {
     return this.getAttribute('src')
@@ -43,12 +43,11 @@ export class OfficeViewerElement extends HTMLElement {
       this.removeAttribute('src')
       return
     }
-
     this.setAttribute('src', value)
   }
 
   get ready(): boolean {
-    return this.lifecycleState === 'ready'
+    return this.status === 'ready'
   }
 
   get error(): Error | null {
@@ -56,39 +55,26 @@ export class OfficeViewerElement extends HTMLElement {
   }
 
   get format(): OfficeFormat | null {
-    return this.adapter?.format ?? null
+    return this.retainedOptions?.format ?? null
   }
 
   get mode(): OfficeViewerMode | null {
-    const mode = (this.adapter?.engine as { mode?: OfficeViewerMode } | null)?.mode
+    const mode = (this.viewer as { mode?: OfficeViewerMode } | null)?.mode
     if (mode === 'worker' || mode === 'main') {
       return mode
     }
-    return null
+    return this.retainedOptions?.mode ?? null
+  }
+
+  getViewer(): OfficeViewer | null {
+    return this.viewer
   }
 
   connectedCallback(): void {
-    if (this.lifecycleState === 'destroyed') {
-      return
-    }
-
-    this.lifecycleState = 'idle'
-
+    this.ensureContainer()
     if (this.src?.trim()) {
       void this.loadFromAttributes()
     }
-  }
-
-  disconnectedCallback(): void {
-    if (this.lifecycleState === 'destroyed') {
-      return
-    }
-
-    this.loadController.cancel(createAbortError('Viewer disconnected.'))
-    this.adapter?.destroy()
-    this.adapter = null
-    this.renderContainer = null
-    this.lifecycleState = 'detached'
   }
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
@@ -106,179 +92,115 @@ export class OfficeViewerElement extends HTMLElement {
     }
   }
 
-  async load(source: OfficeSource, options: OfficeViewerLoadOptions = {}): Promise<void> {
-    if (this.lifecycleState === 'destroyed') {
-      throw new Error('OfficeViewerElement has been destroyed. Call load() on a new element.')
-    }
-
-    const request = this.loadController.beginRequest(options.signal)
-
-    if (request.signal.aborted) {
-      request.detach()
-      throw toAbortError(request.signal.reason)
-    }
+  async load(source: OfficeSource, options: OfficeViewerLoadOptions): Promise<void> {
+    this.cancelActiveLoad()
+    const controller = new AbortController()
+    this.abortController = controller
 
     this.retainedSource = source
     this.retainedOptions = options
     this.lastError = null
-    this.lifecycleState = 'loading'
+    this.setStatus('loading')
     this.emit('loadstart')
 
+    const previous = this.viewer
+    let viewer: OfficeViewer | null = null
+
     try {
-      const resolved = await resolveOfficeSource(source, this.readFileName(), this.readFormat(options.format))
-      const adapter = await this.createAdapter(resolved.format)
-
-      if (!this.loadController.isCurrent(request.id) || request.signal.aborted) {
-        adapter.destroy()
-        throw toAbortError(request.signal.reason)
-      }
-
-      this.adapter?.destroy()
-      this.renderContainer = this.createRenderContainer()
-      this.adapter = adapter
-
-      await adapter.load(
-        { source: resolved.source, format: resolved.format, fileName: resolved.fileName },
-        {
-          mode: this.readMode(options.mode),
-          wasmUrl: this.readWasmUrl(options.wasmUrl),
-          container: this.renderContainer
-        }
-      )
-
-      if (!this.loadController.isCurrent(request.id) || request.signal.aborted) {
-        throw toAbortError(request.signal.reason)
-      }
-
-      this.lifecycleState = 'ready'
-      const detail: OfficeViewerReadyEventDetail = {
-        format: resolved.format,
-        requestedMode: this.readMode(options.mode),
-        effectiveMode: this.mode ?? this.readMode(options.mode)
-      }
-      this.emit<OfficeViewerReadyEventDetail>('ready', detail)
-    } catch (error) {
-      if (!this.loadController.isCurrent(request.id)) {
+      viewer = createViewer(options, this.ensureContainer())
+      await viewer.load(source)
+    } catch (reason) {
+      viewer?.destroy()
+      const error = toError(reason)
+      if (this.abortController !== controller) {
+        // A newer load or destroy() owns the element state now; leave it untouched.
         throw error
       }
-
-      this.lifecycleState = 'error'
-      this.lastError = normalizeError(error)
-      this.emit<OfficeViewerLoadErrorEventDetail>('loaderror', { error: this.lastError })
-
-      if (isAbortError(error) || request.signal.aborted) {
-        throw toAbortError(request.signal.reason ?? error)
-      }
-
+      this.lastError = error
+      this.setStatus('error')
+      this.emit('loaderror', { error })
       throw error
-    } finally {
-      request.detach()
     }
+
+    if (this.abortController !== controller) {
+      // Superseded or destroyed while loading; leave the current state untouched.
+      viewer.destroy()
+      throw createAbortError('Load aborted.')
+    }
+
+    this.viewer = viewer
+    previous?.destroy()
+    this.setStatus('ready')
+    this.emit('ready')
   }
 
   async reload(): Promise<void> {
-    if (this.lifecycleState === 'destroyed') {
-      throw new Error('OfficeViewerElement has been destroyed. Call load() on a new element.')
-    }
-
-    if (!this.retainedSource) {
+    if (!this.retainedSource || !this.retainedOptions) {
       throw new Error('Nothing has been loaded yet.')
     }
-
-    await this.load(this.retainedSource, this.retainedOptions ?? undefined)
+    await this.load(this.retainedSource, this.retainedOptions)
   }
 
   destroy(): void {
-    if (this.lifecycleState === 'destroyed') {
-      return
-    }
-
-    this.loadController.dispose()
-    this.adapter?.destroy()
-    this.adapter = null
-    this.renderContainer = null
+    this.cancelActiveLoad()
+    this.viewer?.destroy()
+    this.viewer = null
     this.retainedSource = null
     this.retainedOptions = null
     this.lastError = null
-    this.lifecycleState = 'destroyed'
+    this.setStatus('idle')
     this.emit('destroy')
   }
 
-  getViewer(): unknown | null {
-    return this.adapter?.viewer ?? null
+  private setStatus(value: OfficeViewerStatus): void {
+    this.status = value
   }
 
-  getDocument(): unknown | null {
-    return this.adapter?.document ?? null
+  private cancelActiveLoad(): void {
+    if (this.abortController) {
+      this.abortController.abort()
+      this.abortController = null
+    }
   }
 
-  getEngine(): unknown | null {
-    return this.adapter?.engine ?? null
+  private ensureContainer(): HTMLElement {
+    if (!this.shadowRoot && typeof this.attachShadow === 'function') {
+      const root = this.attachShadow({ mode: OfficeViewerElement.shadowRootMode })
+      const style = document.createElement('style')
+      style.textContent = `
+        :host { display: block; }
+        #viewer { width: 100%; height: 100%; overflow: auto; }
+      `
+      const container = document.createElement('div')
+      container.id = 'viewer'
+      root.append(style, container)
+      return container
+    }
+
+    const existing = this.shadowRoot?.getElementById('viewer')
+    if (existing) {
+      return existing
+    }
+
+    throw new Error('Unable to create Shadow DOM render container for office-viewer.')
   }
 
   private async loadFromAttributes(): Promise<void> {
     const source = this.src?.trim()
-    if (!source) {
+    const format = parseFormat(this.getAttribute('file-type'))
+    if (!source || !format) {
       return
     }
 
     try {
-      await this.load(source)
+      await this.load(source, {
+        format,
+        mode: parseMode(this.getAttribute('mode')),
+        wasmUrl: normalizeWasmUrl(this.getAttribute('wasm-url') ?? undefined)
+      })
     } catch {
-      // load() already emits loaderror when needed.
+      // load() emits loaderror.
     }
-  }
-
-  private async createAdapter(format: OfficeFormat): Promise<ViewerAdapter> {
-    switch (format) {
-      case 'docx':
-        return createDocxAdapter()
-      case 'xlsx':
-        return createXlsxAdapter()
-      case 'pptx':
-        return createPptxAdapter()
-      default:
-        throw new Error(`Unsupported format: ${format}`)
-    }
-  }
-
-  private createRenderContainer(): HTMLElement {
-    if (typeof document === 'undefined') {
-      throw new Error('OfficeViewerElement requires a browser document.')
-    }
-
-    const container = document.createElement('div')
-    container.style.width = '100%'
-    container.style.height = '100%'
-    container.style.overflow = 'auto'
-    return container
-  }
-
-  private readFormat(explicit?: OfficeFormat): OfficeFormat | undefined {
-    const fromAttribute = parseFormat(this.getAttribute('file-type'))
-    return explicit ?? fromAttribute
-  }
-
-  private readFileName(): string | undefined {
-    return sanitizeAttribute(this.getAttribute('file-name'))
-  }
-
-  private readMode(explicit?: OfficeViewerMode): OfficeViewerMode {
-    if (explicit) {
-      return explicit
-    }
-
-    const fromAttribute = parseMode(this.getAttribute('mode'))
-    return fromAttribute ?? 'worker'
-  }
-
-  private readWasmUrl(explicit?: string | URL): string | URL | undefined {
-    if (explicit) {
-      return explicit
-    }
-
-    const fromAttribute = sanitizeAttribute(this.getAttribute('wasm-url'))
-    return fromAttribute
   }
 
   private emit<T>(name: string, detail?: T): void {
@@ -286,7 +208,6 @@ export class OfficeViewerElement extends HTMLElement {
       this.dispatchEvent(new CustomEvent(name, { detail }))
       return
     }
-
     this.dispatchEvent(new Event(name))
   }
 }
@@ -305,13 +226,25 @@ export function defineOfficeViewerElement(tagName = OFFICE_VIEWER_TAG_NAME): typ
   return OfficeViewerElement
 }
 
-function parseMode(value: string | null): OfficeViewerMode | undefined {
-  const normalized = value?.trim().toLowerCase()
-  if (normalized === 'worker' || normalized === 'main') {
-    return normalized
+function createViewer(
+  options: OfficeViewerLoadOptions,
+  container: HTMLElement
+): OfficeViewer {
+  const loadOptions = {
+    mode: options.mode ?? 'worker',
+    wasmUrl: normalizeWasmUrl(options.wasmUrl)
   }
 
-  return undefined
+  switch (options.format) {
+    case 'docx':
+      return new DocxScrollViewer(container, loadOptions)
+    case 'xlsx':
+      return new XlsxViewer(container, loadOptions)
+    case 'pptx':
+      return new PptxScrollViewer(container, loadOptions)
+    default:
+      throw new Error(`Unsupported format: ${options.format}`)
+  }
 }
 
 function parseFormat(value: string | null): OfficeFormat | undefined {
@@ -319,39 +252,31 @@ function parseFormat(value: string | null): OfficeFormat | undefined {
   if (normalized === 'docx' || normalized === 'xlsx' || normalized === 'pptx') {
     return normalized
   }
-
   return undefined
 }
 
-function sanitizeAttribute(value: string | null): string | undefined {
-  const trimmed = value?.trim()
-  return trimmed ? trimmed : undefined
-}
-
-function normalizeError(error: unknown): Error {
-  if (error instanceof Error) {
-    return error
+function parseMode(value: string | null): OfficeViewerMode | undefined {
+  const normalized = value?.trim().toLowerCase()
+  if (normalized === 'worker' || normalized === 'main') {
+    return normalized
   }
-
-  return new Error(String(error))
+  return undefined
 }
 
-function isAbortError(error: unknown): error is DOMException {
-  return error instanceof DOMException && error.name === 'AbortError'
+function normalizeWasmUrl(wasmUrl: string | URL | undefined): string | undefined {
+  if (wasmUrl instanceof URL) {
+    return wasmUrl.toString()
+  }
+  return wasmUrl
 }
 
 function createAbortError(reason: string): DOMException {
   return new DOMException(reason, 'AbortError')
 }
 
-function toAbortError(reason: unknown): DOMException {
-  if (reason instanceof DOMException && reason.name === 'AbortError') {
+function toError(reason: unknown): Error {
+  if (reason instanceof Error) {
     return reason
   }
-
-  if (reason instanceof Error && reason.name === 'AbortError') {
-    return new DOMException(reason.message, 'AbortError')
-  }
-
-  return new DOMException(typeof reason === 'string' ? reason : 'Aborted.', 'AbortError')
+  return new Error(String(reason))
 }

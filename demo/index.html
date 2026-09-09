@@ -3,153 +3,257 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OOXML integration spike</title>
+    <title>office-viewer demo</title>
     <style>
       :root {
         color-scheme: light dark;
-        font-family: Inter, system-ui, sans-serif;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
       }
 
       body {
         margin: 0;
         min-height: 100vh;
         display: grid;
-        grid-template-columns: 22rem 1fr;
-        background: #111827;
-        color: #f9fafb;
+        grid-template-rows: auto 1fr;
+        background: #f9fafb;
+        color: #111827;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #e5e7eb;
+        background: #ffffff;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 1.1rem;
+        font-weight: 600;
+      }
+
+      label {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.875rem;
+      }
+
+      select, button, input[type='file'] {
+        font: inherit;
+        font-size: 0.875rem;
+      }
+
+      select {
+        padding: 0.35rem 0.5rem;
+        border: 1px solid #d1d5db;
+        border-radius: 0.375rem;
+        background: #ffffff;
+      }
+
+      button {
+        padding: 0.4rem 0.75rem;
+        border: 1px solid #2563eb;
+        border-radius: 0.375rem;
+        background: #2563eb;
+        color: #ffffff;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: #1d4ed8;
+      }
+
+      button.secondary {
+        border-color: #d1d5db;
+        background: #ffffff;
+        color: #374151;
+      }
+
+      button.secondary:hover {
+        background: #f3f4f6;
+      }
+
+      #status {
+        margin-left: auto;
+        font-size: 0.875rem;
+        color: #6b7280;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: 1fr 20rem;
+        min-height: 0;
+      }
+
+      #stage {
+        min-height: 0;
+        padding: 1rem;
+        overflow: auto;
+      }
+
+      office-viewer {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border: 1px solid #e5e7eb;
+        border-radius: 0.5rem;
+        background: #ffffff;
       }
 
       aside {
         padding: 1rem;
-        border-right: 1px solid rgba(255, 255, 255, 0.12);
-        background: #0f172a;
-        display: flex;
-        flex-direction: column;
-        gap: 0.75rem;
+        border-left: 1px solid #e5e7eb;
+        background: #ffffff;
+        overflow: auto;
       }
 
-      main {
-        min-height: 100vh;
-        display: grid;
-        grid-template-rows: auto 1fr;
-      }
-
-      #viewer {
-        min-height: 0;
-        height: calc(100vh - 15rem);
-        margin: 1rem;
-        border-radius: 0.75rem;
-        overflow: hidden;
-        background: #1f2937;
-      }
-
-      label, button, input, select {
-        font: inherit;
-      }
-
-      button {
-        padding: 0.55rem 0.8rem;
-        border-radius: 0.5rem;
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        background: #1d4ed8;
-        color: white;
-        cursor: pointer;
-      }
-
-      button.secondary {
-        background: #374151;
-      }
-
-      input, select {
-        width: 100%;
-        box-sizing: border-box;
-        padding: 0.55rem 0.7rem;
-        border-radius: 0.5rem;
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        background: #111827;
-        color: inherit;
+      aside h2 {
+        margin: 0 0 0.75rem;
+        font-size: 0.875rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.025em;
+        color: #6b7280;
       }
 
       pre {
         margin: 0;
+        padding: 0.75rem;
+        background: #f3f4f6;
+        border-radius: 0.375rem;
+        font-size: 0.75rem;
         white-space: pre-wrap;
         word-break: break-word;
-        background: #020617;
-        padding: 0.75rem;
-        border-radius: 0.5rem;
-        overflow: auto;
-      }
-
-      .row {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 0.5rem;
-      }
-
-      .stack {
-        display: grid;
-        gap: 0.5rem;
       }
     </style>
   </head>
   <body>
-    <aside>
-      <h1>OOXML spike</h1>
-      <p>Raw integration harness for <code>@silurus/ooxml</code>. Worker mode is the default path.</p>
-      <div class="stack">
-        <label>
-          Format
-          <select id="format">
-            <option value="docx">DOCX</option>
-            <option value="xlsx">XLSX</option>
-            <option value="pptx">PPTX</option>
-          </select>
-        </label>
-        <label>
-          Mode
-          <select id="mode">
-            <option value="worker">worker</option>
-            <option value="main">main</option>
-          </select>
-        </label>
-        <label>
-          URL source
-          <input id="url" type="text" />
-        </label>
-        <label>
-          Local file source
-          <input id="file" type="file" />
-        </label>
-        <label>
-          Optional wasmUrl override
-          <input id="wasmUrl" type="text" placeholder="leave empty to use upstream default asset resolution" />
-        </label>
-      </div>
-      <div class="row">
-        <button id="load-url">Load URL</button>
-        <button id="load-file" class="secondary">Load File</button>
-      </div>
-      <div class="row">
-        <button id="sample-url">Sample URL</button>
-        <button id="sample-file" class="secondary">Sample File</button>
-      </div>
-      <div class="row">
-        <button id="reload" class="secondary">Reload</button>
-        <button id="destroy" class="secondary">Destroy</button>
-      </div>
-      <div class="row">
-        <input id="target-index" type="number" min="0" value="0" />
-        <button id="go-index" class="secondary">Go Index</button>
-      </div>
-      <pre id="summary" aria-live="polite"></pre>
-    </aside>
+    <header>
+      <h1>office-viewer</h1>
+      <label>
+        Format
+        <select id="format">
+          <option value="docx" selected>DOCX</option>
+          <option value="xlsx">XLSX</option>
+          <option value="pptx">PPTX</option>
+        </select>
+      </label>
+      <label>
+        Mode
+        <select id="mode">
+          <option value="worker" selected>worker</option>
+          <option value="main">main</option>
+        </select>
+      </label>
+      <button id="load-sample">Load sample</button>
+      <label>
+        <input id="file" type="file" accept=".docx,.xlsx,.pptx" />
+      </label>
+      <button id="load-file" class="secondary">Load file</button>
+      <button id="reload" class="secondary">Reload</button>
+      <button id="destroy" class="secondary">Destroy</button>
+      <span id="status">Idle</span>
+    </header>
     <main>
-      <div style="padding: 1rem 1rem 0;">
-        <strong>Status:</strong>
-        <span id="status">Idle</span>
-      </div>
-      <div id="viewer"></div>
+      <div id="stage"></div>
+      <aside>
+        <h2>State</h2>
+        <pre id="summary">{}</pre>
+      </aside>
     </main>
-    <script type="module" src="./main.ts"></script>
+    <script type="module">
+      import { defineOfficeViewerElement } from '../src'
+
+      const SAMPLES = {
+        docx: '/fixtures/sample.docx',
+        xlsx: '/fixtures/sample.xlsx',
+        pptx: '/fixtures/sample.pptx'
+      }
+
+      const formatSelect = document.querySelector('#format')
+      const modeSelect = document.querySelector('#mode')
+      const fileInput = document.querySelector('#file')
+      const status = document.querySelector('#status')
+      const summary = document.querySelector('#summary')
+      const stage = document.querySelector('#stage')
+
+      defineOfficeViewerElement()
+      const viewer = document.createElement('office-viewer')
+      stage.append(viewer)
+
+      function buildOptions() {
+        return {
+          format: formatSelect.value,
+          mode: modeSelect.value === 'main' ? 'main' : 'worker'
+        }
+      }
+
+      function refreshSummary() {
+        summary.textContent = JSON.stringify(
+          {
+            ready: viewer.ready,
+            error: viewer.error ? { name: viewer.error.name, message: viewer.error.message } : null,
+            format: viewer.format,
+            mode: viewer.mode,
+            viewerType: viewer.getViewer()?.constructor?.name ?? null
+          },
+          null,
+          2
+        )
+      }
+
+      async function load(source) {
+        status.textContent = 'Loading…'
+        refreshSummary()
+
+        try {
+          await viewer.load(source, buildOptions())
+          status.textContent = `${viewer.format?.toUpperCase() ?? ''} ready (${viewer.mode ?? ''})`
+        } catch (error) {
+          status.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`
+        }
+
+        refreshSummary()
+      }
+
+      document.querySelector('#load-sample').addEventListener('click', () => {
+        load(SAMPLES[formatSelect.value])
+      })
+
+      document.querySelector('#load-file').addEventListener('click', () => {
+        const file = fileInput.files?.[0]
+        if (!file) {
+          status.textContent = 'Choose a file first.'
+          return
+        }
+        load(file)
+      })
+
+      document.querySelector('#reload').addEventListener('click', () => {
+        viewer.reload()
+          .then(() => { status.textContent = `Reloaded (${viewer.mode ?? ''})` })
+          .catch((error) => { status.textContent = `Reload failed: ${error instanceof Error ? error.message : String(error)}` })
+          .finally(refreshSummary)
+      })
+
+      document.querySelector('#destroy').addEventListener('click', () => {
+        viewer.destroy()
+        status.textContent = 'Destroyed'
+        refreshSummary()
+      })
+
+      for (const name of ['ready', 'loaderror', 'destroy']) {
+        viewer.addEventListener(name, refreshSummary)
+      }
+
+      refreshSummary()
+    </script>
   </body>
 </html>
