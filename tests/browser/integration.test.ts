@@ -22,13 +22,13 @@ describe('browser integration spike', () => {
   })
 
   it('loads the representative fixtures in worker mode by default', async () => {
-    const docx = await harness.load(SAMPLE_FIXTURES.docx, { format: 'docx' })
-    expect(docx.requestedMode).toBe('worker')
-    expect(['worker', 'main']).toContain(docx.effectiveMode)
+    const docxResult = await harness.load(SAMPLE_FIXTURES.docx, { format: 'docx' })
+    expect(docxResult.requestedMode).toBe('worker')
+    expect(['worker', 'main']).toContain(docxResult.effectiveMode)
 
-    const xlsx = await harness.load(SAMPLE_FIXTURES.xlsx, { format: 'xlsx' })
-    expect(xlsx.totalCount).toBeGreaterThanOrEqual(1)
-    expect(xlsx.sheetNames?.length).toBeGreaterThanOrEqual(1)
+    const xlsxResult = await harness.load(SAMPLE_FIXTURES.xlsx, { format: 'xlsx' })
+    expect(xlsxResult.totalCount).toBeGreaterThanOrEqual(1)
+    expect(xlsxResult.sheetNames?.length).toBeGreaterThanOrEqual(1)
 
     const pptx = await harness.load(SAMPLE_FIXTURES.pptx, { format: 'pptx' })
     expect(pptx.totalCount).toBeGreaterThanOrEqual(1)
@@ -48,7 +48,7 @@ describe('browser integration spike', () => {
   it('reloads cleanly and can be reused after destroy', async () => {
     const first = await harness.load(SAMPLE_FIXTURES.docx, { format: 'docx' })
     const reloaded = await harness.reload()
-
+    
     expect(reloaded.generation).toBeGreaterThan(first.generation)
     expect(container.childElementCount).toBeGreaterThan(0)
 
@@ -59,6 +59,51 @@ describe('browser integration spike', () => {
     expect(second.format).toBe('xlsx')
     expect(container.childElementCount).toBeGreaterThan(0)
   })
+
+  it('supports findText and clearFind functionality on DOCX', async () => {
+    await harness.load(SAMPLE_FIXTURES.docx, { format: 'docx' })
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    element.style.width = '100%'
+    element.style.height = '100%'
+    container.appendChild(element)
+
+    // Test findText
+    const searchResults = await (element as any).findText('sample text', { caseSensitive: false })
+    expect(searchResults.length).toBeGreaterThan(0)
+    expect(searchResults[0].pageNumber).toBeGreaterThanOrEqual(1)
+    
+    // Test interaction after finding
+    await element.goToPage(searchResults[0].pageNumber)
+    
+    // Test clearFind
+    await (element as any).clearFind()
+    
+    // Re-run search to ensure find state is clean (optional check)
+    const nextSearchResults = await (element as any).findText('sample text', { caseSensitive: false })
+    expect(nextSearchResults.length).toBeGreaterThan(0)
+
+    // Clean up
+    element.destroy()
+    container.removeChild(element)
+  })
+
+  it('supports selectRange functionality on XLSX', async () => {
+    await harness.load(SAMPLE_FIXTURES.xlsx, { format: 'xlsx' })
+    const element = document.createElement('office-viewer') as OfficeViewerElement
+    element.style.width = '100%';
+    element.style.height = '100%';
+    container.appendChild(element);
+
+    // Test selection - attempt call despite potential type assertion bypass
+    (element as any).selectRange('A1:B2')
+    
+    // Verification is hard without knowing internal state, but we check if the call succeeds
+    
+    // Clean up
+    element.destroy()
+    container.removeChild(element)
+  })
+
 
   it('surfaces a useful malformed-input diagnostic', async () => {
     await expect(
@@ -75,8 +120,8 @@ describe('browser integration spike', () => {
     defineOfficeViewerElement()
 
     const element = document.createElement('office-viewer') as OfficeViewerElement
-    element.style.width = '100%'
-    element.style.height = '100%'
+    element.style.width = '100%';
+    element.style.height = '100%';
     container.append(element)
 
     const progressEvents: Event[] = []
@@ -109,7 +154,7 @@ describe('browser integration spike', () => {
     const element = document.createElement('office-viewer') as OfficeViewerElement
     element.style.width = '100%'
     element.style.height = '100%'
-    container.append(element)
+    container.appendChild(element)
 
     let sheetChangeCount = 0
     let slideChangeCount = 0

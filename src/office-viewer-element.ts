@@ -434,6 +434,18 @@ export class OfficeViewerElement extends HTMLElement {
       summary
     })
   }
+
+  findText(text: string): boolean {
+    return this.getHarness().findText(text)
+  }
+
+  clearFind(): void {
+    this.getHarness().clearFind()
+  }
+
+  selectRange(start: { page: number; index: number; element: string } | null, end: { page: number; index: number; element: string } | null): boolean {
+    return this.getHarness().selectRange(start, end)
+  }
 }
 
 export function defineOfficeViewerElement(tagName = OFFICE_VIEWER_TAG_NAME): typeof OfficeViewerElement {

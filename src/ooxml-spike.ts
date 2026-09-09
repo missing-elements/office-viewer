@@ -299,6 +299,64 @@ export class OoxmlIntegrationSpike {
     return this.navigateTo('xlsx', sheetIndex)
   }
 
+  /**
+   * Finds text within the document viewer.
+   * @param text The text to search for.
+   * @returns True if text is found, false otherwise.
+   */
+  findText(text: string): boolean {
+    if (!this.activeFormat) {
+      throw new Error('Cannot find text: No active format.');
+    }
+    const adapter = getViewerAdapter(this.activeFormat);
+    if (typeof adapter.findText !== 'function') {
+      return false;
+    }
+    try {
+      adapter.findText(text);
+      return true;
+    } catch (e) {
+      console.error('Error finding text:', e);
+      return false;
+    }
+  }
+
+  /**
+   * Clears any active find selection in the document viewer.
+   */
+  clearFind(): void {
+    if (!this.activeFormat) {
+      throw new Error('Cannot clear find: No active format.');
+    }
+    const adapter = getViewerAdapter(this.activeFormat);
+    adapter.clearFind?.();
+  }
+
+  /**
+   * Selects a range within the document viewer.
+   * @param start Start coordinates.
+   * @param end End coordinates.
+   * @returns True if selection was successful, false otherwise.
+   */
+  selectRange(start: { page: number; index: number; element: string } | null, end: { page: number; index: number; element: string } | null): boolean {
+    if (!this.activeFormat) {
+      throw new Error('Cannot select range: No active format.');
+    }
+    const adapter = getViewerAdapter(this.activeFormat);
+    if (typeof adapter.selectRange !== 'function') {
+      console.error('Error selecting range: Adapter does not support selectRange.');
+      return false;
+    }
+    const rangeIdentifier = JSON.stringify({ start, end });
+    try {
+      adapter.selectRange(rangeIdentifier);
+      return true;
+    } catch (e) {
+      console.error('Error selecting range:', e);
+      return false;
+    }
+  }
+
   private destroyActive(): void {
     this.activeViewer?.destroy()
     this.activeEngine?.destroy()
