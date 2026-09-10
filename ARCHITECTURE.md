@@ -24,15 +24,27 @@ new XlsxViewer(container, { mode, wasmUrl })
 new PptxScrollViewer(container, { mode, wasmUrl })
 ```
 
-Then calls `viewer.load(source)`.
+The format-specific modules are loaded dynamically, so only the requested
+viewer and its WASM assets are fetched. The element accepts URL strings and
+`ArrayBuffer` sources directly; it resolves `Blob`/`File` and
+`ReadableStream<Uint8Array>` sources to an `ArrayBuffer` before calling
+`viewer.load(source)`.
 
 ## Lifecycle
 
 - `connectedCallback`: create Shadow DOM container; auto-load if `src` attribute present.
-- `load`: cancel previous load, create viewer, call `viewer.load(source)`.
+- `load`: cancel a previous load, create a viewer, normalize the source, then
+	call `viewer.load(source)`. Superseded loads destroy their own viewer and do
+	not update the element's state.
 - `reload`: re-run `load` with retained source and options.
 - `destroy`: cancel load, destroy viewer, reset state.
 
+`loadstart` is emitted when loading begins. A successful load emits `ready`; a
+failed load stores the error and emits `loaderror` with `{ error }`. `destroy`
+is emitted after teardown.
+
 ## Public surface
 
-Only `load`, `reload`, `destroy`, `getViewer`, and read-only state properties. Consumers interact with the upstream viewer returned by `getViewer()`.
+Only `load`, `reload`, `destroy`, `getViewer`, and read-only `ready`, `error`,
+`format`, and `mode` state properties are exposed. Consumers interact with the
+upstream viewer returned by `getViewer()`.
