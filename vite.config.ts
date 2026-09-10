@@ -27,7 +27,7 @@ export default defineConfig({
       formats: ['es']
     },
     rollupOptions: {
-      external: [/^@silurus\/ooxml/],
+      external: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx'],
       output: {
         entryFileNames: 'office-viewer.es.js',
         chunkFileNames: 'assets/[name]-[hash].js',

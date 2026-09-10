@@ -188,10 +188,16 @@
       const viewer = document.createElement('office-viewer')
       stage.append(viewer)
 
-      function buildOptions() {
+      async function buildOptions() {
+        const format = formatSelect.value
+        const wasmUrl = location.hostname.includes('codepen.io')
+          ? `https://cdn.jsdelivr.net/npm/@silurus/ooxml@0.86.1/dist/${format}_parser_bg.wasm`
+          : undefined
+        
         return {
-          format: formatSelect.value,
-          mode: modeSelect.value === 'main' ? 'main' : 'worker'
+          format: format,
+          mode: modeSelect.value === 'main' ? 'main' : 'worker',
+          wasmUrl: wasmUrl
         }
       }
 

@@ -42,7 +42,35 @@ npm install @missing-elements/office-viewer
 | `src` | URL to load. |
 | `file-type` | Explicit format: `docx`, `xlsx`, `pptx`. |
 | `mode` | Rendering mode: `worker` (default) or `main`. |
-| `wasm-url` | Custom WASM asset URL. |
+| `wasm-url` | Custom WASM asset URL. For CDN usage, point to the format-specific WASM file (e.g., `docx_parser_bg.wasm`). |
+
+### Usage with WASM from CDN
+
+When using the component via CDN, you must provide the correct WASM file URL:
+
+```html
+<office-viewer 
+  src="report.docx" 
+  file-type="docx"
+  wasm-url="https://cdn.jsdelivr.net/npm/@silurus/ooxml@0.86.1/dist/docx_parser_bg.wasm">
+</office-viewer>
+```
+
+Alternatively, preload the WASM module:
+
+```html
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/@silurus/ooxml@0.86.1/dist/docx_parser_bg.wasm">
+
+<office-viewer src="report.docx" file-type="docx"></office-viewer>
+
+<script type="module">
+  import { defineOfficeViewerElement } from '@missing-elements/office-viewer';
+  defineOfficeViewerElement();
+  
+  const viewer = document.querySelector('office-viewer');
+  await viewer.load('/report.docx', { format: 'docx' });
+</script>
+```
 
 ### Methods
 
