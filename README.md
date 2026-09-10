@@ -70,14 +70,79 @@ npm install @missing-elements/office-viewer
 | `loaderror` | `{ error }` |
 | `destroy` | — |
 
+## Component state
+
+Use the lifecycle events to reflect loading and failure in your own UI. The
+element exposes `ready` and `error` for reading its current terminal state.
+
+```html
+<button id="open" type="button">Open report</button>
+<span id="state" role="status"></span>
+
+<office-viewer style="display: block; height: 80dvh;"></office-viewer>
+
+<script type="module">
+  import { defineOfficeViewerElement } from '@missing-elements/office-viewer';
+
+  defineOfficeViewerElement();
+
+  const viewer = document.querySelector('office-viewer');
+  const openButton = document.querySelector('#open');
+  const state = document.querySelector('#state');
+
+  viewer.addEventListener('loadstart', () => {
+    openButton.disabled = true;
+    state.textContent = 'Loading report...';
+  });
+
+  viewer.addEventListener('ready', () => {
+    openButton.disabled = false;
+    state.textContent = 'Report ready.';
+  });
+
+  viewer.addEventListener('loaderror', (event) => {
+    openButton.disabled = false;
+    state.textContent = `Could not open report: ${event.detail.error.message}`;
+  });
+
+  openButton.addEventListener('click', async () => {
+    try {
+      await viewer.load('/report.docx', { format: 'docx' });
+    } catch {
+      // loaderror has already updated the UI.
+    }
+  });
+</script>
+```
+
 ## Source types
 
-`load()` accepts `string` (URL) or `ArrayBuffer`. Convert `File`, `Blob`, or `Uint8Array` to `ArrayBuffer` before calling `load()`.
+`load()` accepts a URL `string`, `ArrayBuffer`, `Blob` (including `File`), or
+`ReadableStream<Uint8Array>`. Convert `Uint8Array` to `ArrayBuffer` before
+calling `load()`.
 
 ```ts
 const file = document.querySelector('input[type="file"]').files[0];
 const arrayBuffer = await file.arrayBuffer();
 await element.load(arrayBuffer, { format: 'docx' });
+```
+
+## Detecting format
+
+Use [`file-type`](https://www.npmjs.com/package/file-type) to detect a local
+file before loading it:
+
+```ts
+import { fileTypeFromBuffer } from 'file-type';
+
+const arrayBuffer = await file.arrayBuffer();
+const detected = await fileTypeFromBuffer(arrayBuffer);
+
+if (!detected || !['docx', 'xlsx', 'pptx'].includes(detected.ext)) {
+  throw new Error('Select a DOCX, XLSX, or PPTX file.');
+}
+
+await element.load(arrayBuffer, { format: detected.ext });
 ```
 
 ## Browser support

@@ -30,12 +30,13 @@
     "build:plain-module": "pnpm build"
   },
   "dependencies": {
-    "@silurus/ooxml": "0.85.3"
+    "@silurus/ooxml": "0.86.1"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",
     "@vitest/browser": "^4.1.11",
     "@vitest/browser-webdriverio": "^4.1.11",
+    "file-type": "^22.0.2",
     "jsdom": "^30.0.1",
     "typescript": "^7.0.2",
     "vite": "^8.2.2",

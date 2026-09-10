@@ -1,4 +1,4 @@
-export type OfficeSource = string | ArrayBuffer
+export type OfficeSource = string | ArrayBuffer | Blob | ReadableStream<Uint8Array>
 export type OfficeFormat = 'docx' | 'xlsx' | 'pptx'
 export type OfficeViewerMode = 'worker' | 'main'
 export type OfficeViewerStatus = 'idle' | 'loading' | 'ready' | 'error'

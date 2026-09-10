@@ -1,6 +1,8 @@
-import { DocxScrollViewer } from '@silurus/ooxml/docx'
-import { PptxScrollViewer } from '@silurus/ooxml/pptx'
-import { XlsxViewer } from '@silurus/ooxml/xlsx'
+// Type-only imports: erased at runtime, so no format module (or its WASM) loads eagerly.
+// The actual modules are imported dynamically per format in createViewer().
+import type { DocxScrollViewer } from '@silurus/ooxml/docx'
+import type { PptxScrollViewer } from '@silurus/ooxml/pptx'
+import type { XlsxViewer } from '@silurus/ooxml/xlsx'
 import type {
   OfficeFormat,
   OfficeSource,
@@ -15,6 +17,8 @@ export type OfficeViewer = DocxScrollViewer | XlsxViewer | PptxScrollViewer
 
 const RELOAD_ATTRIBUTE_NAMES = new Set(['src', 'file-type', 'mode', 'wasm-url'])
 
+// Allow module evaluation in non-DOM runtimes (SSR/tests); defineOfficeViewerElement()
+// still throws a clear error when customElements is unavailable.
 if (typeof globalThis.HTMLElement === 'undefined') {
   ;(globalThis as { HTMLElement: typeof HTMLElement }).HTMLElement = class {} as typeof HTMLElement
 }
@@ -107,8 +111,10 @@ export class OfficeViewerElement extends HTMLElement {
     let viewer: OfficeViewer | null = null
 
     try {
-      viewer = createViewer(options, this.ensureContainer())
-      await viewer.load(source)
+      viewer = await createViewer(options, this.ensureContainer())
+      // Upstream only accepts a URL string or ArrayBuffer; normalize Blob/File and
+      // ReadableStream sources to an ArrayBuffer so they load the same way.
+      await viewer.load(await resolveSource(source))
     } catch (reason) {
       viewer?.destroy()
       const error = toError(reason)
@@ -226,22 +232,30 @@ export function defineOfficeViewerElement(tagName = OFFICE_VIEWER_TAG_NAME): typ
   return OfficeViewerElement
 }
 
-function createViewer(
+// Imports the format-specific module on demand so only the requested format's
+// code and WASM are fetched; the other two formats are never loaded.
+async function createViewer(
   options: OfficeViewerLoadOptions,
   container: HTMLElement
-): OfficeViewer {
+): Promise<OfficeViewer> {
   const loadOptions = {
     mode: options.mode ?? 'worker',
     wasmUrl: normalizeWasmUrl(options.wasmUrl)
   }
 
   switch (options.format) {
-    case 'docx':
+    case 'docx': {
+      const { DocxScrollViewer } = await import('@silurus/ooxml/docx')
       return new DocxScrollViewer(container, loadOptions)
-    case 'xlsx':
+    }
+    case 'xlsx': {
+      const { XlsxViewer } = await import('@silurus/ooxml/xlsx')
       return new XlsxViewer(container, loadOptions)
-    case 'pptx':
+    }
+    case 'pptx': {
+      const { PptxScrollViewer } = await import('@silurus/ooxml/pptx')
       return new PptxScrollViewer(container, loadOptions)
+    }
     default:
       throw new Error(`Unsupported format: ${options.format}`)
   }
@@ -268,6 +282,50 @@ function normalizeWasmUrl(wasmUrl: string | URL | undefined): string | undefined
     return wasmUrl.toString()
   }
   return wasmUrl
+}
+
+// Converts any supported OfficeSource into the string | ArrayBuffer form upstream
+// accepts. Strings pass through unchanged; Blob/File and ReadableStream are read
+// fully into an ArrayBuffer.
+async function resolveSource(source: OfficeSource): Promise<string | ArrayBuffer> {
+  if (typeof source === 'string' || source instanceof ArrayBuffer) {
+    return source
+  }
+  if (typeof Blob !== 'undefined' && source instanceof Blob) {
+    return source.arrayBuffer()
+  }
+  if (typeof ReadableStream !== 'undefined' && source instanceof ReadableStream) {
+    return readStreamToArrayBuffer(source)
+  }
+  throw new Error('Unsupported source type. Expected a URL string, ArrayBuffer, Blob, File, or ReadableStream<Uint8Array>.')
+}
+
+async function readStreamToArrayBuffer(stream: ReadableStream<Uint8Array>): Promise<ArrayBuffer> {
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) {
+        break
+      }
+      if (value) {
+        chunks.push(value)
+        total += value.byteLength
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  const buffer = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return buffer.buffer
 }
 
 function createAbortError(reason: string): DOMException {

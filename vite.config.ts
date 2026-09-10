@@ -13,6 +13,12 @@ export default defineConfig({
     strictPort: true,
     open: true
   },
+  optimizeDeps: {
+    // Pre-bundle every format entrypoint at server start. The viewer imports each
+    // format on demand (dynamic import), so without this Vite discovers them lazily
+    // and the first request can fail with "504 Outdated Optimize Dep".
+    include: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx']
+  },
   build: {
     lib: {
       entry: resolve(rootDir, 'src/index.ts'),
@@ -21,7 +27,7 @@ export default defineConfig({
       formats: ['es']
     },
     rollupOptions: {
-      external: ['@silurus/ooxml'],
+      external: [/^@silurus\/ooxml/],
       output: {
         entryFileNames: 'office-viewer.es.js',
         chunkFileNames: 'assets/[name]-[hash].js',
