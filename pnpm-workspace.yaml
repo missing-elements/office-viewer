@@ -5,5 +5,3 @@ packages:
 allowBuilds:
   edgedriver: false
   geckodriver: true
-minimumReleaseAgeExclude:
-  - '@silurus/ooxml@0.85.3'

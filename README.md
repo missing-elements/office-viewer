@@ -8,6 +8,7 @@ Headless Web Component orchestration layer for browser-based Office Open XML vie
 - No UI chrome, toolbars, or status widgets.
 - No wrapper methods like `setScale()` or `findText()`.
 - Direct access to the upstream `getViewer()`.
+- Core bundle: 5.52 kB (1.98 kB gzip).
 
 ## Installation
 
