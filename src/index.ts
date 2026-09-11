@@ -4,6 +4,5 @@ export type {
   OfficeFormat,
   OfficeSource,
   OfficeViewerLoadOptions,
-  OfficeViewerMode,
-  OfficeViewerStatus
+  OfficeViewerMode
 } from './types'
