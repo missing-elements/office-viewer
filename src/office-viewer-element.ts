@@ -29,6 +29,10 @@ export class OfficeViewerElement extends HTMLElement {
   private retainedOptions: OfficeViewerLoadOptions | null = null
   private abortController: AbortController | null = null
 
+  get ready(): boolean {
+    return this.viewer !== null
+  }
+
   get src(): string | null {
     return this.getAttribute('src')
   }
