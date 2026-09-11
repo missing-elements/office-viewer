@@ -99,7 +99,6 @@
       }
 
       office-viewer {
-        display: block;
         width: 100%;
         height: 100%;
         border: 1px solid #e5e7eb;
@@ -153,10 +152,9 @@
         </select>
       </label>
       <button id="load-sample">Load sample</button>
-      <label>
+      <label id="file-label" for="file">
         <input id="file" type="file" accept=".docx,.xlsx,.pptx" />
       </label>
-      <button id="load-file" class="secondary">Load file</button>
       <button id="reload" class="secondary">Reload</button>
       <button id="destroy" class="secondary">Destroy</button>
       <span id="status">Idle</span>
@@ -177,89 +175,141 @@
         pptx: '/fixtures/sample.pptx'
       }
 
+      defineOfficeViewerElement()
+      
+      // Create viewer element and attach to DOM
+      const viewer = document.createElement('office-viewer')
+      const stage = document.querySelector('#stage')
+      stage.append(viewer)
+
+      // State management
+      let currentFormat = 'docx'
+      let currentMode = 'worker'
+      
+      let wasmUrl = undefined
+
+      // UI controls
       const formatSelect = document.querySelector('#format')
       const modeSelect = document.querySelector('#mode')
       const fileInput = document.querySelector('#file')
       const status = document.querySelector('#status')
       const summary = document.querySelector('#summary')
-      const stage = document.querySelector('#stage')
 
-      defineOfficeViewerElement()
-      const viewer = document.createElement('office-viewer')
-      stage.append(viewer)
+      // Event handlers for select changes
+      formatSelect.addEventListener('change', () => {
+        currentFormat = formatSelect.value
+        wasmUrl = undefined
+        fileInput.value = ''
+        viewer.destroy()
+      })
 
-      async function buildOptions() {
-        const format = formatSelect.value
-        const wasmUrl = location.hostname.includes('codepen.io')
-          ? `https://cdn.jsdelivr.net/npm/@silurus/ooxml@0.86.1/dist/${format}_parser_bg.wasm`
-          : undefined
+      modeSelect.addEventListener('change', () => {
+        currentMode = modeSelect.value === 'main' ? 'main' : 'worker'
+      })
+
+      // Load sample file
+      document.querySelector('#load-sample').addEventListener('click', async () => {
+        await loadSample()
+      })
+
+      // Load uploaded file
+      document.querySelector('#file').addEventListener('change', async (e) => {
+        const target = e.target
+        const file = target.files?.[0]
+        if (!file) return
         
-        return {
-          format: format,
-          mode: modeSelect.value === 'main' ? 'main' : 'worker',
-          wasmUrl: wasmUrl
+        status.textContent = `Loading ${file.name}...`
+        await loadFile(file)
+      })
+
+      // Reload button
+      document.querySelector('#reload').addEventListener('click', async () => {
+        if (!viewer.retainedSource || !viewer.retainedOptions) {
+          status.textContent = 'Nothing loaded yet.'
+          return
         }
+        try {
+          status.textContent = 'Reloading...'
+          await viewer.reload()
+          status.textContent = `Reloaded (${currentMode})`
+        } catch (error) {
+          status.textContent = `Reload failed: ${error instanceof Error ? error.message : String(error)}`
+        }
+      })
+
+      // Destroy button
+      document.querySelector('#destroy').addEventListener('click', () => {
+        viewer.destroy()
+        status.textContent = 'Destroyed'
+        currentFormat = null
+        currentMode = 'worker'
+      })
+
+      async function loadSample() {
+        if (!currentFormat) {
+          status.textContent = 'No format selected.'
+          return
+        }
+        await loadFile(SAMPLES[currentFormat])
+        formatSelect.value = currentFormat
       }
 
-      function refreshSummary() {
-        summary.textContent = JSON.stringify(
-          {
-            ready: viewer.ready,
-            error: viewer.error ? { name: viewer.error.name, message: viewer.error.message } : null,
-            format: viewer.format,
-            mode: viewer.mode,
-            viewerType: viewer.getViewer()?.constructor?.name ?? null
-          },
-          null,
-          2
-        )
-      }
+      async function loadFile(source, formatOverride = null) {
+        // Support both File objects and URL strings (from SAMPLES)
+        let ext
+        
+        if (typeof source === 'string') {
+          const url = new URL('file://' + source)
+          ext = url.pathname.split('/').pop()?.split('.').pop()?.toLowerCase() || 'docx'
+        } else if (source instanceof Blob) {
+          ext = source.name.split('.').pop()?.toLowerCase() || 'docx'
+        } else {
+          ext = 'docx'
+        }
+        
+        ext = formatOverride ? formatOverride.toLowerCase() : ext
+        
+        if (!['docx', 'xlsx', 'pptx'].includes(ext)) {
+          status.textContent = `Error: Unsupported file format. Expected .docx, .xlsx, or .pptx`
+          updateSummary()
+          return
+        }
 
-      async function load(source) {
-        status.textContent = 'Loading…'
-        refreshSummary()
+        currentFormat = ext
+        formatSelect.value = currentFormat
+        status.textContent = `Loading ${ext.toUpperCase()}...`
+        updateSummary()
 
         try {
-          await viewer.load(source, buildOptions())
-          status.textContent = `${viewer.format?.toUpperCase() ?? ''} ready (${viewer.mode ?? ''})`
+          await viewer.load(source, {
+            format: ext,
+            mode: currentMode,
+            wasmUrl: wasmUrl
+          })
+          status.textContent = `${ext.toUpperCase()} ready (${currentMode})`
         } catch (error) {
           status.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`
         }
 
-        refreshSummary()
+        updateSummary()
       }
 
-      document.querySelector('#load-sample').addEventListener('click', () => {
-        load(SAMPLES[formatSelect.value])
-      })
-
-      document.querySelector('#load-file').addEventListener('click', () => {
-        const file = fileInput.files?.[0]
-        if (!file) {
-          status.textContent = 'Choose a file first.'
-          return
-        }
-        load(file)
-      })
-
-      document.querySelector('#reload').addEventListener('click', () => {
-        viewer.reload()
-          .then(() => { status.textContent = `Reloaded (${viewer.mode ?? ''})` })
-          .catch((error) => { status.textContent = `Reload failed: ${error instanceof Error ? error.message : String(error)}` })
-          .finally(refreshSummary)
-      })
-
-      document.querySelector('#destroy').addEventListener('click', () => {
-        viewer.destroy()
-        status.textContent = 'Destroyed'
-        refreshSummary()
-      })
+      // Listen to viewer events for automatic summary updates
+      const updateSummary = () => {
+        summary.textContent = JSON.stringify({
+          ready: viewer.ready,
+          error: viewer.error ? { name: viewer.error.name, message: viewer.error.message } : null,
+          format: viewer.format,
+          mode: viewer.mode
+        }, null, 2)
+      }
 
       for (const name of ['ready', 'loaderror', 'destroy']) {
-        viewer.addEventListener(name, refreshSummary)
+        viewer.addEventListener(name, updateSummary)
       }
 
-      refreshSummary()
+      updateSummary()
     </script>
   </body>
 </html>
+

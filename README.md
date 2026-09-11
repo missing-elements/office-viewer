@@ -6,9 +6,7 @@ Headless Web Component orchestration layer for browser-based Office Open XML vie
 
 - Open Shadow DOM protects the viewer surface from global styles.
 - No UI chrome, toolbars, or status widgets.
-- No wrapper methods like `setScale()` or `findText()`.
 - Direct access to the upstream `getViewer()`.
-- Core bundle: 5.52 kB (1.98 kB gzip).
 
 ## Installation
 
@@ -182,3 +180,7 @@ await element.load(arrayBuffer, { format: detected.ext });
 ## License
 
 MIT
+
+## Third-Party Notices
+
+https://github.com/yukiyokotani/office-open-xml-viewer#third-party-notices

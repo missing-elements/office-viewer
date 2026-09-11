@@ -1,6 +1,6 @@
 {
   "name": "@missing-elements/office-viewer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Headless Web Component orchestration layer for browser-based OOXML viewing with @silurus/ooxml.",
   "type": "module",
   "license": "MIT",

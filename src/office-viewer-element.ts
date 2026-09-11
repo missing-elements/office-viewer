@@ -1,8 +1,3 @@
-// Type-only imports: erased at runtime, so no format module (or its WASM) loads eagerly.
-// The actual modules are imported dynamically per format in createViewer().
-import type { DocxScrollViewer } from '@silurus/ooxml/docx'
-import type { PptxScrollViewer } from '@silurus/ooxml/pptx'
-import type { XlsxViewer } from '@silurus/ooxml/xlsx'
 import type {
   OfficeFormat,
   OfficeSource,
@@ -13,8 +8,6 @@ import type {
 
 export const OFFICE_VIEWER_TAG_NAME = 'office-viewer'
 
-export type OfficeViewer = DocxScrollViewer | XlsxViewer | PptxScrollViewer
-
 const RELOAD_ATTRIBUTE_NAMES = new Set(['src', 'file-type', 'mode', 'wasm-url'])
 
 // Allow module evaluation in non-DOM runtimes (SSR/tests); defineOfficeViewerElement()
@@ -22,6 +15,12 @@ const RELOAD_ATTRIBUTE_NAMES = new Set(['src', 'file-type', 'mode', 'wasm-url'])
 if (typeof globalThis.HTMLElement === 'undefined') {
   ;(globalThis as { HTMLElement: typeof HTMLElement }).HTMLElement = class {} as typeof HTMLElement
 }
+
+import type { DocxScrollViewer } from '@silurus/ooxml/docx'
+import type { XlsxViewer } from '@silurus/ooxml/xlsx'
+import type { PptxScrollViewer } from '@silurus/ooxml/pptx'
+
+export type OfficeViewer = DocxScrollViewer | XlsxViewer | PptxScrollViewer
 
 export class OfficeViewerElement extends HTMLElement {
   static get observedAttributes(): string[] {
@@ -32,7 +31,7 @@ export class OfficeViewerElement extends HTMLElement {
   static readonly shadowRootMode: ShadowRootMode = 'open'
 
   private viewer: OfficeViewer | null = null
-  private status: OfficeViewerStatus = 'idle'
+  private _status: OfficeViewerStatus = 'idle'
   private lastError: Error | null = null
   private retainedSource: OfficeSource | null = null
   private retainedOptions: OfficeViewerLoadOptions | null = null
@@ -50,8 +49,12 @@ export class OfficeViewerElement extends HTMLElement {
     this.setAttribute('src', value)
   }
 
+  get status(): OfficeViewerStatus {
+    return this._status
+  }
+
   get ready(): boolean {
-    return this.status === 'ready'
+    return this._status === 'ready'
   }
 
   get error(): Error | null {
@@ -111,6 +114,7 @@ export class OfficeViewerElement extends HTMLElement {
     let viewer: OfficeViewer | null = null
 
     try {
+      // Await the promise returned by createViewer (which contains a dynamic import)
       viewer = await createViewer(options, this.ensureContainer())
       // Upstream only accepts a URL string or ArrayBuffer; normalize Blob/File and
       // ReadableStream sources to an ArrayBuffer so they load the same way.
@@ -159,7 +163,7 @@ export class OfficeViewerElement extends HTMLElement {
   }
 
   private setStatus(value: OfficeViewerStatus): void {
-    this.status = value
+    this._status = value
   }
 
   private cancelActiveLoad(): void {
@@ -173,10 +177,7 @@ export class OfficeViewerElement extends HTMLElement {
     if (!this.shadowRoot && typeof this.attachShadow === 'function') {
       const root = this.attachShadow({ mode: OfficeViewerElement.shadowRootMode })
       const style = document.createElement('style')
-      style.textContent = `
-        :host { display: block; }
-        #viewer { width: 100%; height: 100%; overflow: auto; }
-      `
+      style.textContent = `:host{display:block}#viewer{width:100%;height:100%;overflow:auto}`
       const container = document.createElement('div')
       container.id = 'viewer'
       root.append(style, container)
@@ -232,8 +233,6 @@ export function defineOfficeViewerElement(tagName = OFFICE_VIEWER_TAG_NAME): typ
   return OfficeViewerElement
 }
 
-// Imports the format-specific module on demand so only the requested format's
-// code and WASM are fetched; the other two formats are never loaded.
 async function createViewer(
   options: OfficeViewerLoadOptions,
   container: HTMLElement
@@ -243,22 +242,29 @@ async function createViewer(
     wasmUrl: normalizeWasmUrl(options.wasmUrl)
   }
 
-  switch (options.format) {
-    case 'docx': {
-      const { DocxScrollViewer } = await import('@silurus/ooxml/docx')
-      return new DocxScrollViewer(container, loadOptions)
+  // Ensure format is normalized for case-insensitive matching
+  const format = (options.format ?? '').trim().toLowerCase()
+
+  const viewerPromise = (async () => {
+    switch (format) {
+      case 'docx': {
+        const { DocxScrollViewer } = await import('@silurus/ooxml/docx')
+        return new DocxScrollViewer(container, loadOptions)
+      }
+      case 'xlsx': {
+        const { XlsxViewer } = await import('@silurus/ooxml/xlsx')
+        return new XlsxViewer(container, loadOptions)
+      }
+      case 'pptx': {
+        const { PptxScrollViewer } = await import('@silurus/ooxml/pptx')
+        return new PptxScrollViewer(container, loadOptions)
+      }
+      default:
+        throw new Error(`Unsupported format: ${options.format}`)
     }
-    case 'xlsx': {
-      const { XlsxViewer } = await import('@silurus/ooxml/xlsx')
-      return new XlsxViewer(container, loadOptions)
-    }
-    case 'pptx': {
-      const { PptxScrollViewer } = await import('@silurus/ooxml/pptx')
-      return new PptxScrollViewer(container, loadOptions)
-    }
-    default:
-      throw new Error(`Unsupported format: ${options.format}`)
-  }
+  })()
+
+  return viewerPromise
 }
 
 function parseFormat(value: string | null): OfficeFormat | undefined {

@@ -5,7 +5,7 @@ const rootDir = import.meta.dirname
 
 export default defineConfig({
   base: './',
-  root: resolve(rootDir, 'demo'),
+  root: resolve(rootDir),
   publicDir: resolve(rootDir, 'public'),
   server: {
     host: '127.0.0.1',
@@ -34,6 +34,8 @@ export default defineConfig({
         assetFileNames: 'assets/[name]-[hash][extname]',
         globals: {}
       }
-    }
+    },
+    outDir: resolve(rootDir, 'dist'),
+    emptyOutDir: true
   }
 })
