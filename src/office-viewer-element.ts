@@ -3,35 +3,27 @@ import type {
   OfficeSource,
   OfficeViewerLoadOptions,
   OfficeViewerMode,
-  OfficeViewerStatus
 } from './types'
 
 export const OFFICE_VIEWER_TAG_NAME = 'office-viewer'
 
-const RELOAD_ATTRIBUTE_NAMES = new Set(['src', 'file-type', 'mode', 'wasm-url'])
+const RELOAD_ATTRIBUTE_NAMES = new Set(['src', 'file-type', 'mode'])
 
-// Allow module evaluation in non-DOM runtimes (SSR/tests); defineOfficeViewerElement()
-// still throws a clear error when customElements is unavailable.
-if (typeof globalThis.HTMLElement === 'undefined') {
-  ;(globalThis as { HTMLElement: typeof HTMLElement }).HTMLElement = class {} as typeof HTMLElement
-}
+import { type DocxScrollViewer as DocxScrollViewerType } from '@silurus/ooxml/docx'
+import { type PptxScrollViewer as PptxScrollViewerType } from '@silurus/ooxml/pptx'
+import { type XlsxViewer as XlsxViewerType } from '@silurus/ooxml/xlsx'
 
-import type { DocxScrollViewer } from '@silurus/ooxml/docx'
-import type { XlsxViewer } from '@silurus/ooxml/xlsx'
-import type { PptxScrollViewer } from '@silurus/ooxml/pptx'
-
-export type OfficeViewer = DocxScrollViewer | XlsxViewer | PptxScrollViewer
+export type OfficeViewer = DocxScrollViewerType | XlsxViewerType | PptxScrollViewerType
 
 export class OfficeViewerElement extends HTMLElement {
   static get observedAttributes(): string[] {
-    return ['src', 'file-type', 'mode', 'wasm-url']
+    return ['src', 'file-type', 'mode']
   }
 
   static readonly tagName = OFFICE_VIEWER_TAG_NAME
   static readonly shadowRootMode: ShadowRootMode = 'open'
 
   private viewer: OfficeViewer | null = null
-  private _status: OfficeViewerStatus = 'idle'
   private lastError: Error | null = null
   private retainedSource: OfficeSource | null = null
   private retainedOptions: OfficeViewerLoadOptions | null = null
@@ -47,14 +39,6 @@ export class OfficeViewerElement extends HTMLElement {
       return
     }
     this.setAttribute('src', value)
-  }
-
-  get status(): OfficeViewerStatus {
-    return this._status
-  }
-
-  get ready(): boolean {
-    return this._status === 'ready'
   }
 
   get error(): Error | null {
@@ -107,8 +91,7 @@ export class OfficeViewerElement extends HTMLElement {
     this.retainedSource = source
     this.retainedOptions = options
     this.lastError = null
-    this.setStatus('loading')
-    this.emit('loadstart')
+    this.dispatchEvent(new CustomEvent('loadstart'))
 
     const previous = this.viewer
     let viewer: OfficeViewer | null = null
@@ -127,8 +110,7 @@ export class OfficeViewerElement extends HTMLElement {
         throw error
       }
       this.lastError = error
-      this.setStatus('error')
-      this.emit('loaderror', { error })
+      this.dispatchEvent(new CustomEvent('loaderror', { detail: { error } }))
       throw error
     }
 
@@ -140,8 +122,7 @@ export class OfficeViewerElement extends HTMLElement {
 
     this.viewer = viewer
     previous?.destroy()
-    this.setStatus('ready')
-    this.emit('ready')
+    this.dispatchEvent(new CustomEvent('ready'))
   }
 
   async reload(): Promise<void> {
@@ -158,12 +139,7 @@ export class OfficeViewerElement extends HTMLElement {
     this.retainedSource = null
     this.retainedOptions = null
     this.lastError = null
-    this.setStatus('idle')
-    this.emit('destroy')
-  }
-
-  private setStatus(value: OfficeViewerStatus): void {
-    this._status = value
+    this.dispatchEvent(new CustomEvent('destroy'))
   }
 
   private cancelActiveLoad(): void {
@@ -202,21 +178,13 @@ export class OfficeViewerElement extends HTMLElement {
     try {
       await this.load(source, {
         format,
-        mode: parseMode(this.getAttribute('mode')),
-        wasmUrl: normalizeWasmUrl(this.getAttribute('wasm-url') ?? undefined)
+        mode: parseMode(this.getAttribute('mode'))
       })
     } catch {
       // load() emits loaderror.
     }
   }
 
-  private emit<T>(name: string, detail?: T): void {
-    if (typeof CustomEvent === 'function') {
-      this.dispatchEvent(new CustomEvent(name, { detail }))
-      return
-    }
-    this.dispatchEvent(new Event(name))
-  }
 }
 
 export function defineOfficeViewerElement(tagName = OFFICE_VIEWER_TAG_NAME): typeof OfficeViewerElement {
@@ -238,39 +206,29 @@ async function createViewer(
   container: HTMLElement
 ): Promise<OfficeViewer> {
   const loadOptions = {
-    mode: options.mode ?? 'worker',
-    wasmUrl: normalizeWasmUrl(options.wasmUrl)
+    mode: options.mode ?? 'worker'
   }
 
-  // Ensure format is normalized for case-insensitive matching
-  const format = (options.format ?? '').trim().toLowerCase()
+  if (options.format === 'docx') {
+    const { DocxScrollViewer } = await import('@silurus/ooxml/docx')
+    return new DocxScrollViewer(container, loadOptions)
+  }
+  if (options.format === 'pptx') {
+    const { PptxScrollViewer } = await import('@silurus/ooxml/pptx')
+    return new PptxScrollViewer(container, loadOptions)
+  }
+  if (options.format === 'xlsx') {
+    const { XlsxViewer } = await import('@silurus/ooxml/xlsx')
+    return new XlsxViewer(container, loadOptions)
+  }
 
-  const viewerPromise = (async () => {
-    switch (format) {
-      case 'docx': {
-        const { DocxScrollViewer } = await import('@silurus/ooxml/docx')
-        return new DocxScrollViewer(container, loadOptions)
-      }
-      case 'xlsx': {
-        const { XlsxViewer } = await import('@silurus/ooxml/xlsx')
-        return new XlsxViewer(container, loadOptions)
-      }
-      case 'pptx': {
-        const { PptxScrollViewer } = await import('@silurus/ooxml/pptx')
-        return new PptxScrollViewer(container, loadOptions)
-      }
-      default:
-        throw new Error(`Unsupported format: ${options.format}`)
-    }
-  })()
-
-  return viewerPromise
+  throw new Error(`Unsupported format: ${options.format}`)
 }
 
 function parseFormat(value: string | null): OfficeFormat | undefined {
   const normalized = value?.trim().toLowerCase()
-  if (normalized === 'docx' || normalized === 'xlsx' || normalized === 'pptx') {
-    return normalized
+  if (['docx', 'xlsx', 'pptx'].includes(normalized ?? '')) {
+    return normalized as OfficeFormat
   }
   return undefined
 }
@@ -281,13 +239,6 @@ function parseMode(value: string | null): OfficeViewerMode | undefined {
     return normalized
   }
   return undefined
-}
-
-function normalizeWasmUrl(wasmUrl: string | URL | undefined): string | undefined {
-  if (wasmUrl instanceof URL) {
-    return wasmUrl.toString()
-  }
-  return wasmUrl
 }
 
 // Converts any supported OfficeSource into the string | ArrayBuffer form upstream

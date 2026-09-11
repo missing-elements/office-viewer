@@ -6,7 +6,6 @@ const rootDir = import.meta.dirname
 export default defineConfig({
   base: './',
   root: resolve(rootDir),
-  publicDir: resolve(rootDir, 'public'),
   server: {
     host: '127.0.0.1',
     port: 5173,
@@ -15,8 +14,7 @@ export default defineConfig({
   },
   optimizeDeps: {
     // Pre-bundle every format entrypoint at server start. The viewer imports each
-    // format on demand (dynamic import), so without this Vite discovers them lazily
-    // and the first request can fail with "504 Outdated Optimize Dep".
+    // format on demand (dynamic import)
     include: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx']
   },
   build: {
@@ -27,7 +25,6 @@ export default defineConfig({
       formats: ['es']
     },
     rollupOptions: {
-      external: ['@silurus/ooxml/docx', '@silurus/ooxml/xlsx', '@silurus/ooxml/pptx'],
       output: {
         entryFileNames: 'office-viewer.es.js',
         chunkFileNames: 'assets/[name]-[hash].js',
@@ -36,6 +33,7 @@ export default defineConfig({
       }
     },
     outDir: resolve(rootDir, 'dist'),
+    copyPublicDir: false,
     emptyOutDir: true
   }
 })

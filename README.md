@@ -40,35 +40,6 @@ npm install @missing-elements/office-viewer
 | `src` | URL to load. |
 | `file-type` | Explicit format: `docx`, `xlsx`, `pptx`. |
 | `mode` | Rendering mode: `worker` (default) or `main`. |
-| `wasm-url` | Custom WASM asset URL. For CDN usage, point to the format-specific WASM file (e.g., `docx_parser_bg.wasm`). |
-
-### Usage with WASM from CDN
-
-When using the component via CDN, you must provide the correct WASM file URL:
-
-```html
-<office-viewer 
-  src="report.docx" 
-  file-type="docx"
-  wasm-url="https://cdn.jsdelivr.net/npm/@silurus/ooxml@0.86.1/dist/docx_parser_bg.wasm">
-</office-viewer>
-```
-
-Alternatively, preload the WASM module:
-
-```html
-<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/@silurus/ooxml@0.86.1/dist/docx_parser_bg.wasm">
-
-<office-viewer src="report.docx" file-type="docx"></office-viewer>
-
-<script type="module">
-  import { defineOfficeViewerElement } from '@missing-elements/office-viewer';
-  defineOfficeViewerElement();
-  
-  const viewer = document.querySelector('office-viewer');
-  await viewer.load('/report.docx', { format: 'docx' });
-</script>
-```
 
 ### Methods
 
@@ -83,12 +54,15 @@ Alternatively, preload the WASM module:
 
 | Property | Description |
 | --- | --- |
-| `ready` | `true` when a document is loaded and ready. |
+| `status` | Current status: `'idle'`, `'loading'`, `'ready'`, or `'error'`. |
+| `ready` | `true` when a document is loaded and ready (alias for `status === 'ready'`). |
 | `error` | Last error, if any. |
 | `format` | Loaded format. |
 | `mode` | Effective rendering mode. |
 
 ### Events
+
+Events are dispatched by the element but not required for SSR-compatible usage.
 
 | Event | Detail |
 | --- | --- |
@@ -99,8 +73,7 @@ Alternatively, preload the WASM module:
 
 ## Component state
 
-Use the lifecycle events to reflect loading and failure in your own UI. The
-element exposes `ready` and `error` for reading its current terminal state.
+For server-side rendering, use the `status` property to read the current state: `'idle'`, `'loading'`, `'ready'`, or `'error'`. Events can be used for client-side reactivity.
 
 ```html
 <button id="open" type="button">Open report</button>
@@ -117,20 +90,21 @@ element exposes `ready` and `error` for reading its current terminal state.
   const openButton = document.querySelector('#open');
   const state = document.querySelector('#state');
 
-  viewer.addEventListener('loadstart', () => {
-    openButton.disabled = true;
-    state.textContent = 'Loading report...';
-  });
+  const updateState = () => {
+    if (viewer.status === 'loading') {
+      openButton.disabled = true;
+      state.textContent = 'Loading report...';
+    } else if (viewer.status === 'ready') {
+      openButton.disabled = false;
+      state.textContent = 'Report ready.';
+    } else if (viewer.status === 'error') {
+      openButton.disabled = false;
+      const err = viewer.error;
+      state.textContent = `Could not open report: ${err?.message ?? String(err)}`;
+    }
+  };
 
-  viewer.addEventListener('ready', () => {
-    openButton.disabled = false;
-    state.textContent = 'Report ready.';
-  });
-
-  viewer.addEventListener('loaderror', (event) => {
-    openButton.disabled = false;
-    state.textContent = `Could not open report: ${event.detail.error.message}`;
-  });
+  updateState();
 
   openButton.addEventListener('click', async () => {
     try {
