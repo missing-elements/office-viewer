@@ -28,7 +28,7 @@ npm install @missing-elements/office-viewer
   viewer.setScale(1.5);
 </script>
 
-<office-viewer style="display: block; height: 100dvh;"></office-viewer>
+<office-viewer style="height: 100svh"></office-viewer>
 ```
 
 ## Public API
@@ -79,7 +79,7 @@ For server-side rendering, use the `status` property to read the current state: 
 <button id="open" type="button">Open report</button>
 <span id="state" role="status"></span>
 
-<office-viewer style="display: block; height: 80dvh;"></office-viewer>
+<office-viewer style="height: 80svh;"></office-viewer>
 
 <script type="module">
   import { defineOfficeViewerElement } from '@missing-elements/office-viewer';
@@ -122,10 +122,14 @@ For server-side rendering, use the `status` property to read the current state: 
 `ReadableStream<Uint8Array>`. Convert `Uint8Array` to `ArrayBuffer` before
 calling `load()`.
 
-```ts
+```js
+// Load from a File object (e.g., from an <input type="file">)
 const file = document.querySelector('input[type="file"]').files[0];
 const arrayBuffer = await file.arrayBuffer();
 await element.load(arrayBuffer, { format: 'docx' });
+
+// Or load directly from a URL string
+await element.load('/report.docx', { format: 'docx' });
 ```
 
 ## Detecting format
@@ -133,7 +137,7 @@ await element.load(arrayBuffer, { format: 'docx' });
 Use [`file-type`](https://www.npmjs.com/package/file-type) to detect a local
 file before loading it:
 
-```ts
+```js
 import { fileTypeFromBuffer } from 'file-type';
 
 const arrayBuffer = await file.arrayBuffer();

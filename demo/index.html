@@ -94,16 +94,12 @@
 
       #stage {
         min-height: 0;
-        padding: 1rem;
         overflow: auto;
       }
 
       office-viewer {
         width: 100%;
         height: 100%;
-        border: 1px solid #e5e7eb;
-        border-radius: 0.5rem;
-        background: #ffffff;
       }
 
       aside {
@@ -136,22 +132,15 @@
   <body>
     <header>
       <h1>office-viewer</h1>
-      <label>
-        Format
-        <select id="format">
-          <option value="docx" selected>DOCX</option>
-          <option value="xlsx">XLSX</option>
-          <option value="pptx">PPTX</option>
-        </select>
-      </label>
-      <label>
-        Mode
         <select id="mode">
-          <option value="worker" selected>worker</option>
+          <option value="null" selected>None</option>
+          <option value="worker">worker</option>
           <option value="main">main</option>
         </select>
-      </label>
-      <button id="load-sample">Load sample</button>
+      </select>
+      <button id="load-docx">Load sample DOCX</button>
+      <button id="load-xlsx">Load sample XLSX</button>
+      <button id="load-pptx">Load sample PPTX</button>
       <label id="file-label" for="file">
         <input id="file" type="file" accept=".docx,.xlsx,.pptx" />
       </label>
@@ -188,28 +177,41 @@
       
       let wasmUrl = undefined
 
-      // UI controls
-      const formatSelect = document.querySelector('#format')
+      // Mode change handler
       const modeSelect = document.querySelector('#mode')
+      modeSelect.addEventListener('change', (event) => {
+        currentMode = event.target.value || 'worker'
+        status.textContent = `Mode changed to ${currentMode}`
+      })
+
+      // UI controls
       const fileInput = document.querySelector('#file')
       const status = document.querySelector('#status')
       const summary = document.querySelector('#summary')
 
-      // Event handlers for select changes
-      formatSelect.addEventListener('change', () => {
-        currentFormat = formatSelect.value
+
+      document.querySelector('#load-docx').addEventListener('click', async () => {
+        currentFormat = 'docx'
         wasmUrl = undefined
         fileInput.value = ''
         viewer.destroy()
+        await loadFile(SAMPLES.docx)
       })
 
-      modeSelect.addEventListener('change', () => {
-        currentMode = modeSelect.value === 'main' ? 'main' : 'worker'
+      document.querySelector('#load-xlsx').addEventListener('click', async () => {
+        currentFormat = 'xlsx'
+        wasmUrl = undefined
+        fileInput.value = ''
+        viewer.destroy()
+        await loadFile(SAMPLES.xlsx)
       })
 
-      // Load sample file
-      document.querySelector('#load-sample').addEventListener('click', async () => {
-        await loadSample()
+      document.querySelector('#load-pptx').addEventListener('click', async () => {
+        currentFormat = 'pptx'
+        wasmUrl = undefined
+        fileInput.value = ''
+        viewer.destroy()
+        await loadFile(SAMPLES.pptx)
       })
 
       // Load uploaded file
@@ -251,18 +253,21 @@
           return
         }
         await loadFile(SAMPLES[currentFormat])
-        formatSelect.value = currentFormat
       }
 
       async function loadFile(source, formatOverride = null) {
         // Support both File objects and URL strings (from SAMPLES)
         let ext
         
-        if (typeof source === 'string') {
-          const url = new URL('file://' + source)
-          ext = url.pathname.split('/').pop()?.split('.').pop()?.toLowerCase() || 'docx'
-        } else if (source instanceof Blob) {
+        // Support both File objects and URL strings
+        if (source instanceof File) {
           ext = source.name.split('.').pop()?.toLowerCase() || 'docx'
+        } else if (typeof source === 'string') {
+          // For URLs, extract extension from pathname
+          const urlObj = new URL(source.startsWith('http') ? source : `file://${source}`)
+          ext = urlObj.pathname.split('/').pop()?.split('.').pop()?.toLowerCase() || 'docx'
+        } else if (source instanceof Blob) {
+          ext = 'docx' // Blobs don't have a name, default to 'docx'
         } else {
           ext = 'docx'
         }
@@ -276,16 +281,21 @@
         }
 
         currentFormat = ext
-        formatSelect.value = currentFormat
         status.textContent = `Loading ${ext.toUpperCase()}...`
         updateSummary()
 
         try {
-          await viewer.load(source, {
+          const loadOptions = {
             format: ext,
-            mode: currentMode,
-            wasmUrl: wasmUrl
-          })
+            mode: currentMode
+          }
+          
+          // Only pass wasmUrl if it's defined
+          if (wasmUrl !== undefined) {
+            loadOptions.wasmUrl = wasmUrl
+          }
+          
+          await viewer.load(source, loadOptions)
           status.textContent = `${ext.toUpperCase()} ready (${currentMode})`
         } catch (error) {
           status.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`
@@ -295,9 +305,8 @@
       }
 
       const updateSummary = () => {
-        console.log('Updating summary...', { status: viewer.status })
+        console.log('Updating summary...', viewer.mode)
         summary.textContent = JSON.stringify({
-          status: viewer.status,
           error: viewer.error ? { name: viewer.error.name, message: viewer.error.message } : null,
           format: viewer.format,
           mode: viewer.mode
