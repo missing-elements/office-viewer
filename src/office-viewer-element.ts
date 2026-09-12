@@ -15,6 +15,23 @@ import { type XlsxViewer as XlsxViewerType } from '@silurus/ooxml/xlsx'
 
 export type OfficeViewer = DocxScrollViewerType | XlsxViewerType | PptxScrollViewerType
 
+/**
+ * Converts an unknown value to an Error instance.
+ */
+function toError(reason: unknown): Error {
+  if (reason instanceof Error) {
+    return reason
+  }
+  return new Error(String(reason))
+}
+
+/**
+ * Creates a DOMException with AbortError code.
+ */
+function createAbortError(reason: string): DOMException {
+  return new DOMException(reason, 'AbortError')
+}
+
 export class OfficeViewerElement extends HTMLElement {
   static get observedAttributes(): string[] {
     return ['src', 'file-type', 'mode']
@@ -65,6 +82,9 @@ export class OfficeViewerElement extends HTMLElement {
     return this.viewer
   }
 
+  /**
+   * Connects the element to the DOM and starts loading if a src is provided.
+   */
   connectedCallback(): void {
     this.ensureContainer()
     if (this.src?.trim()) {
@@ -72,6 +92,9 @@ export class OfficeViewerElement extends HTMLElement {
     }
   }
 
+  /**
+   * Handles attribute changes for reloadable attributes.
+   */
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
     if (oldValue === newValue || !this.isConnected || !RELOAD_ATTRIBUTE_NAMES.has(name)) {
       return
@@ -87,6 +110,11 @@ export class OfficeViewerElement extends HTMLElement {
     }
   }
 
+  /**
+   * Loads an Office document from the given source.
+   * @param source - URL string, ArrayBuffer, Blob, File, or ReadableStream
+   * @param options - Format and optional mode/wasmUrl
+   */
   async load(source: OfficeSource, options: OfficeViewerLoadOptions): Promise<void> {
     this.cancelActiveLoad()
     const controller = new AbortController()
@@ -126,9 +154,14 @@ export class OfficeViewerElement extends HTMLElement {
 
     this.viewer = viewer
     previous?.destroy()
+
     this.dispatchEvent(new CustomEvent('ready'))
   }
 
+  /**
+   * Reloads the last loaded document with the same source and options.
+   * @throws Error if nothing has been loaded yet.
+   */
   async reload(): Promise<void> {
     if (!this.retainedSource || !this.retainedOptions) {
       throw new Error('Nothing has been loaded yet.')
@@ -136,6 +169,9 @@ export class OfficeViewerElement extends HTMLElement {
     await this.load(this.retainedSource, this.retainedOptions)
   }
 
+  /**
+   * Cancels an active load and destroys the current viewer.
+   */
   destroy(): void {
     this.cancelActiveLoad()
     this.viewer?.destroy()
@@ -191,6 +227,9 @@ export class OfficeViewerElement extends HTMLElement {
 
 }
 
+/**
+ * Defines the custom element with the given tag name.
+ */
 export function defineOfficeViewerElement(tagName = OFFICE_VIEWER_TAG_NAME): typeof OfficeViewerElement {
   const existing = typeof customElements === 'undefined' ? undefined : customElements.get(tagName)
   if (existing) {
@@ -205,12 +244,16 @@ export function defineOfficeViewerElement(tagName = OFFICE_VIEWER_TAG_NAME): typ
   return OfficeViewerElement
 }
 
+/**
+ * Creates the appropriate upstream viewer based on format.
+ */
 async function createViewer(
   options: OfficeViewerLoadOptions,
   container: HTMLElement
 ): Promise<OfficeViewer> {
   const loadOptions = {
-    mode: options.mode ?? 'worker'
+    mode: options.mode ?? 'worker',
+    wasmUrl: options.wasmUrl
   }
 
   if (options.format === 'docx') {
@@ -229,6 +272,9 @@ async function createViewer(
   throw new Error(`Unsupported format: ${options.format}`)
 }
 
+/**
+ * Parses the file-type attribute into an OfficeFormat.
+ */
 function parseFormat(value: string | null): OfficeFormat | undefined {
   const normalized = value?.trim().toLowerCase()
   if (['docx', 'xlsx', 'pptx'].includes(normalized ?? '')) {
@@ -237,6 +283,9 @@ function parseFormat(value: string | null): OfficeFormat | undefined {
   return undefined
 }
 
+/**
+ * Parses the mode attribute into an OfficeViewerMode.
+ */
 function parseMode(value: string | null): OfficeViewerMode | undefined {
   const normalized = value?.trim().toLowerCase()
   if (normalized === 'worker' || normalized === 'main') {
@@ -245,9 +294,11 @@ function parseMode(value: string | null): OfficeViewerMode | undefined {
   return undefined
 }
 
-// Converts any supported OfficeSource into the string | ArrayBuffer form upstream
-// accepts. Strings pass through unchanged; Blob/File and ReadableStream are read
-// fully into an ArrayBuffer.
+/**
+ * Converts any supported OfficeSource into the string | ArrayBuffer form upstream
+ * accepts. Strings pass through unchanged; Blob/File and ReadableStream are read
+ * fully into an ArrayBuffer.
+ */
 async function resolveSource(source: OfficeSource): Promise<string | ArrayBuffer> {
   if (typeof source === 'string' || source instanceof ArrayBuffer) {
     return source
@@ -261,6 +312,9 @@ async function resolveSource(source: OfficeSource): Promise<string | ArrayBuffer
   throw new Error('Unsupported source type. Expected a URL string, ArrayBuffer, Blob, File, or ReadableStream<Uint8Array>.')
 }
 
+/**
+ * Reads a ReadableStream<Uint8Array> into an ArrayBuffer.
+ */
 async function readStreamToArrayBuffer(stream: ReadableStream<Uint8Array>): Promise<ArrayBuffer> {
   const reader = stream.getReader()
   const chunks: Uint8Array[] = []
@@ -287,15 +341,4 @@ async function readStreamToArrayBuffer(stream: ReadableStream<Uint8Array>): Prom
     offset += chunk.byteLength
   }
   return buffer.buffer
-}
-
-function createAbortError(reason: string): DOMException {
-  return new DOMException(reason, 'AbortError')
-}
-
-function toError(reason: unknown): Error {
-  if (reason instanceof Error) {
-    return reason
-  }
-  return new Error(String(reason))
 }

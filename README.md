@@ -33,6 +33,24 @@ npm install @missing-elements/office-viewer
 <office-viewer style="height: 100svh"></office-viewer>
 ```
 
+### CodePen and other hosted editors
+
+Worker mode loads the format parser as a WebAssembly asset. Hosted editors that
+bundle JavaScript but do not serve package assets need an absolute `wasmUrl`.
+Use the asset that matches the document format and pin it to the installed
+`@silurus/ooxml` version:
+
+```js
+await element.load(file, {
+  format: 'docx',
+  mode: 'worker',
+  wasmUrl: 'https://cdn.jsdelivr.net/npm/@silurus/ooxml@0.86.1/dist/docx_parser_bg.wasm'
+});
+```
+
+Replace `docx` in both places with `xlsx` or `pptx` for those formats. The
+`main` mode does not require this workaround.
+
 ## Public API
 
 ### Attributes
@@ -47,7 +65,7 @@ npm install @missing-elements/office-viewer
 
 | Method | Description |
 | --- | --- |
-| `load(source, options)` | Load a document. `source` is `string \| ArrayBuffer`. `options.format` is required. |
+| `load(source, options)` | Load a document. `source` is a URL string, `ArrayBuffer`, `Blob`/`File`, or `ReadableStream<Uint8Array>`. `options.format` is required; `options.wasmUrl` may point to a served parser WASM asset. |
 | `reload()` | Reload the last source and options. |
 | `destroy()` | Tear down the upstream viewer. |
 | `getViewer()` | Returns the upstream viewer instance (`DocxScrollViewer`, `XlsxViewer`, or `PptxScrollViewer`). |
@@ -56,8 +74,7 @@ npm install @missing-elements/office-viewer
 
 | Property | Description |
 | --- | --- |
-| `status` | Current status: `'idle'`, `'loading'`, `'ready'`, or `'error'`. |
-| `ready` | `true` when a document is loaded and ready (alias for `status === 'ready'`). |
+| `ready` | `true` when a document is loaded and ready. |
 | `error` | Last error, if any. |
 | `format` | Loaded format. |
 | `mode` | Effective rendering mode. |
@@ -73,9 +90,10 @@ Events are dispatched by the element but not required for SSR-compatible usage.
 | `loaderror` | `{ error }` |
 | `destroy` | — |
 
-## Component state
+## Reacting to loads
 
-For server-side rendering, use the `status` property to read the current state: `'idle'`, `'loading'`, `'ready'`, or `'error'`. Events can be used for client-side reactivity.
+Use the element's events for client-side load state. The `ready` property is
+`true` only after a successful load, and `error` contains the latest failure.
 
 ```html
 <button id="open" type="button">Open report</button>
@@ -92,21 +110,20 @@ For server-side rendering, use the `status` property to read the current state: 
   const openButton = document.querySelector('#open');
   const state = document.querySelector('#state');
 
-  const updateState = () => {
-    if (viewer.status === 'loading') {
-      openButton.disabled = true;
-      state.textContent = 'Loading report...';
-    } else if (viewer.status === 'ready') {
-      openButton.disabled = false;
-      state.textContent = 'Report ready.';
-    } else if (viewer.status === 'error') {
-      openButton.disabled = false;
-      const err = viewer.error;
-      state.textContent = `Could not open report: ${err?.message ?? String(err)}`;
-    }
-  };
+  viewer.addEventListener('loadstart', () => {
+    openButton.disabled = true;
+    state.textContent = 'Loading report...';
+  });
 
-  updateState();
+  viewer.addEventListener('ready', () => {
+    openButton.disabled = false;
+    state.textContent = 'Report ready.';
+  });
+
+  viewer.addEventListener('loaderror', (event) => {
+    openButton.disabled = false;
+    state.textContent = `Could not open report: ${event.detail.error.message}`;
+  });
 
   openButton.addEventListener('click', async () => {
     try {

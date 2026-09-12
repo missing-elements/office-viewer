@@ -11,4 +11,5 @@ export type OfficeViewer = DocxScrollViewer | PptxScrollViewer | XlsxViewer
 export interface OfficeViewerLoadOptions {
   format: OfficeFormat
   mode?: OfficeViewerMode
+  wasmUrl?: string | URL
 }
