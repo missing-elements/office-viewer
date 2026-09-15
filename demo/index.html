@@ -45,9 +45,17 @@
         font-size: 0.875rem;
       }
 
-      select, button, input[type='file'] {
+      select, button, input[type='file'], input[type='url'] {
         font: inherit;
         font-size: 0.875rem;
+      }
+
+      input[type='url'] {
+        width: 16rem;
+        padding: 0.35rem 0.5rem;
+        border: 1px solid #d1d5db;
+        border-radius: 0.375rem;
+        background: #ffffff;
       }
 
       select {
@@ -132,21 +140,27 @@
   <body>
     <header>
       <h1>office-viewer</h1>
+      <label>
+        Mode
         <select id="mode">
-          <option value="null" selected>None</option>
+          <option value="" selected>default (worker)</option>
           <option value="worker">worker</option>
           <option value="main">main</option>
         </select>
-      </select>
-      <button id="load-docx">Load sample DOCX</button>
-      <button id="load-xlsx">Load sample XLSX</button>
-      <button id="load-pptx">Load sample PPTX</button>
-      <label id="file-label" for="file">
+      </label>
+      <label>
+        wasmUrl
+        <input id="wasm-url" type="url" placeholder="optional absolute .wasm URL" />
+      </label>
+      <button type="button" data-sample="docx">Load sample DOCX</button>
+      <button type="button" data-sample="xlsx">Load sample XLSX</button>
+      <button type="button" data-sample="pptx">Load sample PPTX</button>
+      <label for="file">
         <input id="file" type="file" accept=".docx,.xlsx,.pptx" />
       </label>
-      <button id="reload" class="secondary">Reload</button>
-      <button id="destroy" class="secondary">Destroy</button>
-      <span id="status">Idle</span>
+      <button id="reload" type="button" class="secondary">Reload</button>
+      <button id="destroy" type="button" class="secondary">Destroy</button>
+      <span id="status" role="status">Idle</span>
     </header>
     <main>
       <div id="stage"></div>
@@ -165,156 +179,87 @@
       }
 
       defineOfficeViewerElement()
-      
-      // Create viewer element and attach to DOM
+
       const viewer = document.createElement('office-viewer')
-      const stage = document.querySelector('#stage')
-      stage.append(viewer)
+      document.querySelector('#stage').append(viewer)
 
-      // State management
-      let currentFormat = 'docx'
-      let currentMode = 'worker'
-      
-      let wasmUrl = undefined
-
-      // Mode change handler
       const modeSelect = document.querySelector('#mode')
-      modeSelect.addEventListener('change', (event) => {
-        currentMode = event.target.value || 'worker'
-        status.textContent = `Mode changed to ${currentMode}`
-      })
-
-      // UI controls
+      const wasmUrlInput = document.querySelector('#wasm-url')
       const fileInput = document.querySelector('#file')
       const status = document.querySelector('#status')
       const summary = document.querySelector('#summary')
 
-
-      document.querySelector('#load-docx').addEventListener('click', async () => {
-        currentFormat = 'docx'
-        wasmUrl = undefined
-        fileInput.value = ''
-        viewer.destroy()
-        await loadFile(SAMPLES.docx)
+      // The element's events drive the UI. load() promises are awaited only to
+      // observe rejections that have no matching event, such as AbortError.
+      viewer.addEventListener('loadstart', () => setStatus('Loading...'))
+      viewer.addEventListener('ready', () => {
+        setStatus(`${viewer.format.toUpperCase()} ready (${viewer.mode})`)
       })
-
-      document.querySelector('#load-xlsx').addEventListener('click', async () => {
-        currentFormat = 'xlsx'
-        wasmUrl = undefined
-        fileInput.value = ''
-        viewer.destroy()
-        await loadFile(SAMPLES.xlsx)
+      viewer.addEventListener('loaderror', (event) => {
+        setStatus(`Error: ${event.detail.error.message}`)
       })
+      viewer.addEventListener('destroy', () => setStatus('Destroyed'))
 
-      document.querySelector('#load-pptx').addEventListener('click', async () => {
-        currentFormat = 'pptx'
-        wasmUrl = undefined
-        fileInput.value = ''
-        viewer.destroy()
-        await loadFile(SAMPLES.pptx)
-      })
+      for (const button of document.querySelectorAll('[data-sample]')) {
+        button.addEventListener('click', () => {
+          fileInput.value = ''
+          const format = button.dataset.sample
+          load(SAMPLES[format], format)
+        })
+      }
 
-      // Load uploaded file
-      document.querySelector('#file').addEventListener('change', async (e) => {
-        const target = e.target
-        const file = target.files?.[0]
+      fileInput.addEventListener('change', () => {
+        const file = fileInput.files?.[0]
         if (!file) return
-        
-        status.textContent = `Loading ${file.name}...`
-        await loadFile(file)
+        // The element validates the format and reports an unknown one via loaderror.
+        load(file, file.name.split('.').pop()?.toLowerCase() ?? '')
       })
 
-      // Reload button
-      document.querySelector('#reload').addEventListener('click', async () => {
-        if (!viewer.retainedSource || !viewer.retainedOptions) {
-          status.textContent = 'Nothing loaded yet.'
-          return
-        }
-        try {
-          status.textContent = 'Reloading...'
-          await viewer.reload()
-          status.textContent = `Reloaded (${currentMode})`
-        } catch (error) {
-          status.textContent = `Reload failed: ${error instanceof Error ? error.message : String(error)}`
-        }
-      })
+      document.querySelector('#reload').addEventListener('click', () => run(() => viewer.reload()))
+      document.querySelector('#destroy').addEventListener('click', () => viewer.destroy())
 
-      // Destroy button
-      document.querySelector('#destroy').addEventListener('click', () => {
-        viewer.destroy()
-        status.textContent = 'Destroyed'
-        currentFormat = null
-        currentMode = 'worker'
-      })
-
-      async function loadSample() {
-        if (!currentFormat) {
-          status.textContent = 'No format selected.'
-          return
-        }
-        await loadFile(SAMPLES[currentFormat])
+      function load(source, format) {
+        return run(() =>
+          viewer.load(source, {
+            format,
+            mode: modeSelect.value || undefined,
+            wasmUrl: wasmUrlInput.value.trim() || undefined
+          })
+        )
       }
 
-      async function loadFile(source, formatOverride = null) {
-        // Support both File objects and URL strings (from SAMPLES)
-        let ext
-        
-        // Support both File objects and URL strings
-        if (source instanceof File) {
-          ext = source.name.split('.').pop()?.toLowerCase() || 'docx'
-        } else if (typeof source === 'string') {
-          // For URLs, extract extension from pathname
-          const urlObj = new URL(source.startsWith('http') ? source : `file://${source}`)
-          ext = urlObj.pathname.split('/').pop()?.split('.').pop()?.toLowerCase() || 'docx'
-        } else if (source instanceof Blob) {
-          ext = 'docx' // Blobs don't have a name, default to 'docx'
-        } else {
-          ext = 'docx'
-        }
-        
-        ext = formatOverride ? formatOverride.toLowerCase() : ext
-        
-        if (!['docx', 'xlsx', 'pptx'].includes(ext)) {
-          status.textContent = `Error: Unsupported file format. Expected .docx, .xlsx, or .pptx`
-          updateSummary()
-          return
-        }
-
-        currentFormat = ext
-        status.textContent = `Loading ${ext.toUpperCase()}...`
-        updateSummary()
-
+      async function run(action) {
         try {
-          const loadOptions = {
-            format: ext,
-            mode: currentMode
-          }
-          
-          // Only pass wasmUrl if it's defined
-          if (wasmUrl !== undefined) {
-            loadOptions.wasmUrl = wasmUrl
-          }
-          
-          await viewer.load(source, loadOptions)
-          status.textContent = `${ext.toUpperCase()} ready (${currentMode})`
+          await action()
         } catch (error) {
-          status.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`
+          // A superseded load rejects with AbortError and needs no message;
+          // loaderror has already reported real load failures.
+          if (error?.name !== 'AbortError') {
+            setStatus(`Error: ${error instanceof Error ? error.message : String(error)}`)
+          }
         }
-
         updateSummary()
       }
 
-      const updateSummary = () => {
-        console.log('Updating summary...', viewer.mode)
-        summary.textContent = JSON.stringify({
-          error: viewer.error ? { name: viewer.error.name, message: viewer.error.message } : null,
-          format: viewer.format,
-          mode: viewer.mode
-        }, null, 2)
+      function setStatus(text) {
+        status.textContent = text
+        updateSummary()
+      }
+
+      function updateSummary() {
+        summary.textContent = JSON.stringify(
+          {
+            ready: viewer.ready,
+            format: viewer.format,
+            mode: viewer.mode,
+            error: viewer.error ? { name: viewer.error.name, message: viewer.error.message } : null
+          },
+          null,
+          2
+        )
       }
 
       updateSummary()
     </script>
   </body>
 </html>
-

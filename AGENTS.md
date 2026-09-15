@@ -12,14 +12,21 @@ Read `ARCHITECTURE.md` before changing lifecycle behavior or the public API.
 
 - `src/office-viewer-element.ts`: component lifecycle, source normalization,
   format selection, and upstream viewer creation.
-- `src/types.ts`: public TypeScript types.
+- `src/types.ts`: public TypeScript types, the `OfficeViewer` instance union,
+  and `OFFICE_FORMATS`, the single source for the format list.
 - `src/index.ts`: package exports. Update and verify it when adding a public
   type or API.
-- `tests/office-viewer-element.test.ts`: jsdom unit tests.
+- `tests/office-viewer-element.test.ts`: jsdom unit tests for the lifecycle
+  contract. They mock the three `@silurus/ooxml` entrypoints with
+  `tests/helpers/fake-viewer.ts`, a controllable stand-in whose `load()` can be
+  held, finished, or failed. It mirrors upstream's worst case: it detaches the
+  `ArrayBuffer` it is given and does not settle an in-flight `load()` on
+  `destroy()`.
 - `tests/browser/file-formats.test.ts`: Firefox browser tests using real Office
   fixtures in both `main` and `worker` modes.
 - `public/fixtures/`: Office files used by browser tests.
-- `demo/`: manual Vite demo, not a production UI.
+- `demo/`: manual Vite demo, not a production UI. It must only use the public
+  element API.
 
 ## Design Constraints
 
@@ -29,28 +36,49 @@ Read `ARCHITECTURE.md` before changing lifecycle behavior or the public API.
 - Load format modules dynamically so consumers only fetch the selected format.
 - Default to `mode: 'worker'`; preserve `main` as a fallback.
 - Forward supported upstream options, such as `wasmUrl`, instead of duplicating
-  upstream loader behavior. Hosted editors may need an absolute `wasmUrl`.
-- Preserve load ownership: a superseded load must destroy only its own viewer
-  and must not update the newer load's state.
+  upstream loader behavior. Hosted editors may need an absolute `wasmUrl`; the
+  `wasm-url` attribute exists for declarative use.
+- Preserve load ownership: a newer `load()`, `destroy()`, or removal from the
+  document cancels the in-flight load immediately (stream read cancelled, viewer
+  destroyed, nothing mounted afterwards). Race every await against the abort
+  signal: upstream does not settle `load()` when its viewer is destroyed. The
+  cancelled promise rejects with a `DOMException` named `AbortError`, emits
+  nothing, and never updates element state.
+- Validate the format before importing a module; never construct a viewer for
+  an invalid format or source.
 - `load()` accepts URL strings, `ArrayBuffer`, `Blob`/`File`, and
   `ReadableStream<Uint8Array>`; normalize non-native upstream inputs before
-  calling `viewer.load()`.
-- If an unsupported source type is passed, reject the load promise and emit
-  `loaderror` with a descriptive error before calling `viewer.load()`.
+  calling `viewer.load()`. Upstream may detach the `ArrayBuffer` it receives, so
+  never retain it: keep URL strings and `Blob`/`File` as-is and keep a `Blob`
+  copy for `ArrayBuffer` and stream sources.
+- Coalesce attribute changes into one load per microtask. An explicit `load()`
+  outranks attribute changes made earlier in the same task. Clearing `src`
+  unloads only an attribute-driven document.
+- On removal from the document, release the viewer and in-flight load after one
+  microtask (so synchronous moves keep the viewer) but keep the retained
+  request; reconnecting restores it unless attributes changed while detached.
+  Moves without attribute changes and failed loads never start work.
+- Do not read upstream private fields. Upstream scroll viewers expose no public
+  `mode`; the element reports the mode it created the viewer with.
 
 ## Public API Expectations
 
 - `load(source, { format, mode?, wasmUrl? })` starts a load and rejects on
-  failure.
-- On every load: clear the previous error, emit `loadstart`, and emit either
-  `ready` or `loaderror` with `{ error }`.
-- `reload()` repeats the retained source and options. `destroy()` cancels an
-  active load, destroys the current upstream viewer, resets retained state, and
-  emits `destroy`.
-- Calling `destroy()` when no load has started or after a previous destroy()
-  must be a safe no-op that still resets state without throwing.
-- If `reload()` is called before any `load()` has succeeded, reject with an
-  explicit error indicating that there is no prior load to repeat.
+  failure. Options are shallow-copied.
+- On every load: clear the previous error, emit `loadstart`, and then emit
+  either `ready` or `loaderror` with `{ error }`, unless the load is cancelled.
+- An unsupported format or source type rejects the load promise and emits
+  `loaderror` with a descriptive error before any viewer is created.
+- `ready`, `getViewer()`, `format`, and `mode` describe the committed viewer
+  and change together on `ready`. `mode` is the mode the viewer was created with
+  (`worker` when omitted). `error` describes the most recent owning load.
+- `reload()` repeats the most recent request, including a failed one. If no
+  request has been made since the last `destroy()`, reject with an explicit
+  error.
+- `destroy()` cancels an active load, destroys the current upstream viewer,
+  forgets the retained request, resets state, and emits `destroy`. Calling it
+  when nothing is loaded or after a previous `destroy()` is a safe no-op that
+  still resets state and emits `destroy`.
 - The public instance surface is `load`, `reload`, `destroy`, `getViewer`, and
   the read-only `ready`, `error`, `format`, and `mode` properties. Keep it
   aligned with `ARCHITECTURE.md`, `README.md`, and `src/index.ts` exports.
@@ -78,12 +106,15 @@ For manual testing, run `pnpm dev`. Vite is configured for
 ## Change Workflow
 
 1. Make the smallest change at the owning layer; avoid unrelated refactors.
-2. Add or update a focused test for behavior changes. Test all affected formats
-   and both render modes when changing viewer creation, assets, or loading.
+2. Add or update a focused test for behavior changes. Lifecycle, ownership,
+   attribute, and source-normalization behavior belongs in the jsdom unit tests
+   with the fake viewer. Test all affected formats and both render modes in the
+   browser tests when changing viewer creation, assets, or loading against the
+   real upstream.
 3. Run `pnpm typecheck` after TypeScript changes. Run `pnpm test:unit` for
-  logic changes; run `pnpm test:browser` for changes to viewer creation,
-  assets, or loading; run both if a change spans both areas. Then run
-  `pnpm build` for package or bundling changes.
+   logic changes; run `pnpm test:browser` for changes to viewer creation,
+   assets, or loading; run both if a change spans both areas. Then run
+   `pnpm build` for package or bundling changes.
 4. Keep `README.md` and `ARCHITECTURE.md` accurate when public behavior,
    supported sources, modes, or deployment requirements change.
 

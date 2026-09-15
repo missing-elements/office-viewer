@@ -1,50 +1,69 @@
+import { OFFICE_FORMATS } from './types'
 import type {
   OfficeFormat,
   OfficeSource,
+  OfficeViewer,
+  OfficeViewerLoadErrorDetail,
   OfficeViewerLoadOptions,
-  OfficeViewerMode,
+  OfficeViewerMode
 } from './types'
 
 export const OFFICE_VIEWER_TAG_NAME = 'office-viewer'
 
-const RELOAD_ATTRIBUTE_NAMES = new Set(['src', 'file-type', 'mode'])
+const OBSERVED_ATTRIBUTES = ['src', 'file-type', 'mode', 'wasm-url'] as const
+const DEFAULT_MODE: OfficeViewerMode = 'worker'
 
-import { type DocxScrollViewer as DocxScrollViewerType } from '@silurus/ooxml/docx'
-import { type PptxScrollViewer as PptxScrollViewerType } from '@silurus/ooxml/pptx'
-import { type XlsxViewer as XlsxViewerType } from '@silurus/ooxml/xlsx'
+type ResolvedLoadOptions = OfficeViewerLoadOptions & { mode: OfficeViewerMode }
 
-export type OfficeViewer = DocxScrollViewerType | XlsxViewerType | PptxScrollViewerType
+type ViewerConstructor = new (
+  container: HTMLElement,
+  options: { mode: OfficeViewerMode; wasmUrl?: string | URL }
+) => OfficeViewer
 
-/**
- * Converts an unknown value to an Error instance.
- */
-function toError(reason: unknown): Error {
-  if (reason instanceof Error) {
-    return reason
-  }
-  return new Error(String(reason))
+// Dynamic imports keep each format's module and WASM out of the bundle until requested.
+const VIEWER_MODULES: Record<OfficeFormat, () => Promise<ViewerConstructor>> = {
+  docx: async () => (await import('@silurus/ooxml/docx')).DocxScrollViewer,
+  xlsx: async () => (await import('@silurus/ooxml/xlsx')).XlsxViewer,
+  pptx: async () => (await import('@silurus/ooxml/pptx')).PptxScrollViewer
 }
 
-/**
- * Creates a DOMException with AbortError code.
- */
-function createAbortError(reason: string): DOMException {
-  return new DOMException(reason, 'AbortError')
+interface RetainedRequest {
+  source: OfficeSource
+  options: ResolvedLoadOptions
+}
+
+interface PendingLoad {
+  controller: AbortController
+  viewer: OfficeViewer | null
+}
+
+interface ResolvedSource {
+  /** Bytes handed to upstream, which may take ownership of them. */
+  bytes: string | ArrayBuffer
+  /** Re-readable form kept for reload(). */
+  retain: string | Blob
 }
 
 export class OfficeViewerElement extends HTMLElement {
   static get observedAttributes(): string[] {
-    return ['src', 'file-type', 'mode']
+    return [...OBSERVED_ATTRIBUTES]
   }
 
   static readonly tagName = OFFICE_VIEWER_TAG_NAME
   static readonly shadowRootMode: ShadowRootMode = 'open'
 
   private viewer: OfficeViewer | null = null
+  private viewerOptions: ResolvedLoadOptions | null = null
+  private pending: PendingLoad | null = null
+  private retained: RetainedRequest | null = null
   private lastError: Error | null = null
-  private retainedSource: OfficeSource | null = null
-  private retainedOptions: OfficeViewerLoadOptions | null = null
-  private abortController: AbortController | null = null
+  // Attributes changed since the last sync. A later explicit load() outranks them.
+  private attributesDirty = false
+  private syncScheduled = false
+  // The current request came from attributes, so clearing src unloads it.
+  private attributeDriven = false
+  // Torn down by removal from the document; reconnecting restores the retained request.
+  private restoreOnConnect = false
 
   get ready(): boolean {
     return this.viewer !== null
@@ -67,126 +86,135 @@ export class OfficeViewerElement extends HTMLElement {
   }
 
   get format(): OfficeFormat | null {
-    return this.retainedOptions?.format ?? null
+    return this.viewerOptions?.format ?? null
   }
 
   get mode(): OfficeViewerMode | null {
-    const mode = (this.viewer as { mode?: OfficeViewerMode } | null)?.mode
-    if (mode === 'worker' || mode === 'main') {
-      return mode
-    }
-    return this.retainedOptions?.mode ?? null
+    return this.viewerOptions?.mode ?? null
   }
 
   getViewer(): OfficeViewer | null {
     return this.viewer
   }
 
-  /**
-   * Connects the element to the DOM and starts loading if a src is provided.
-   */
   connectedCallback(): void {
     this.ensureContainer()
-    if (this.src?.trim()) {
-      void this.loadFromAttributes()
-    }
+    this.scheduleSync()
   }
 
-  /**
-   * Handles attribute changes for reloadable attributes.
-   */
-  attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
-    if (oldValue === newValue || !this.isConnected || !RELOAD_ATTRIBUTE_NAMES.has(name)) {
-      return
-    }
-
-    if (name === 'src' && !newValue?.trim()) {
-      this.destroy()
-      return
-    }
-
-    if (this.src?.trim()) {
-      void this.loadFromAttributes()
-    }
-  }
-
-  /**
-   * Loads an Office document from the given source.
-   * @param source - URL string, ArrayBuffer, Blob, File, or ReadableStream
-   * @param options - Format and optional mode/wasmUrl
-   */
-  async load(source: OfficeSource, options: OfficeViewerLoadOptions): Promise<void> {
-    this.cancelActiveLoad()
-    const controller = new AbortController()
-    this.abortController = controller
-
-    this.retainedSource = source
-    this.retainedOptions = options
-    this.lastError = null
-    this.dispatchEvent(new CustomEvent('loadstart'))
-
-    const previous = this.viewer
-    let viewer: OfficeViewer | null = null
-
-    try {
-      // Await the promise returned by createViewer (which contains a dynamic import)
-      viewer = await createViewer(options, this.ensureContainer())
-      // Upstream only accepts a URL string or ArrayBuffer; normalize Blob/File and
-      // ReadableStream sources to an ArrayBuffer so they load the same way.
-      await viewer.load(await resolveSource(source))
-    } catch (reason) {
-      viewer?.destroy()
-      const error = toError(reason)
-      if (this.abortController !== controller) {
-        // A newer load or destroy() owns the element state now; leave it untouched.
-        throw error
+  disconnectedCallback(): void {
+    // Deferred so a synchronous move (remove, then append) keeps the viewer alive.
+    queueMicrotask(() => {
+      if (this.isConnected || (!this.viewer && !this.pending)) {
+        return
       }
-      this.lastError = error
-      this.dispatchEvent(new CustomEvent('loaderror', { detail: { error } }))
-      throw error
-    }
-
-    if (this.abortController !== controller) {
-      // Superseded or destroyed while loading; leave the current state untouched.
-      viewer.destroy()
-      throw createAbortError('Load aborted.')
-    }
-
-    this.viewer = viewer
-    previous?.destroy()
-
-    this.dispatchEvent(new CustomEvent('ready'))
+      // Release the worker and DOM now; the request stays retained so reconnecting restores it.
+      this.teardown('Removed from the document while loading.')
+      this.restoreOnConnect = true
+      this.dispatchEvent(new CustomEvent('destroy'))
+    })
   }
 
-  /**
-   * Reloads the last loaded document with the same source and options.
-   * @throws Error if nothing has been loaded yet.
-   */
+  attributeChangedCallback(_name: string, oldValue: string | null, newValue: string | null): void {
+    if (oldValue !== newValue) {
+      this.attributesDirty = true
+      this.scheduleSync()
+    }
+  }
+
+  async load(source: OfficeSource, options: OfficeViewerLoadOptions): Promise<void> {
+    await this.start(source, options, false)
+  }
+
   async reload(): Promise<void> {
-    if (!this.retainedSource || !this.retainedOptions) {
-      throw new Error('Nothing has been loaded yet.')
+    if (!this.retained) {
+      throw new Error('Nothing to reload: no load() has been requested yet.')
     }
-    await this.load(this.retainedSource, this.retainedOptions)
+    await this.start(this.retained.source, this.retained.options, this.attributeDriven)
   }
 
-  /**
-   * Cancels an active load and destroys the current viewer.
-   */
   destroy(): void {
-    this.cancelActiveLoad()
-    this.viewer?.destroy()
-    this.viewer = null
-    this.retainedSource = null
-    this.retainedOptions = null
-    this.lastError = null
+    this.teardown('Destroyed while loading.')
+    this.retained = null
+    this.attributeDriven = false
+    this.restoreOnConnect = false
     this.dispatchEvent(new CustomEvent('destroy'))
   }
 
-  private cancelActiveLoad(): void {
-    if (this.abortController) {
-      this.abortController.abort()
-      this.abortController = null
+  private async start(source: OfficeSource, options: OfficeViewerLoadOptions, attributeDriven: boolean): Promise<void> {
+    this.cancelActiveLoad('Superseded by a newer load.')
+    // An explicit load() outranks attribute changes made earlier in the same task.
+    this.attributesDirty = false
+    this.attributeDriven = attributeDriven
+    this.restoreOnConnect = false
+
+    const pending: PendingLoad = { controller: new AbortController(), viewer: null }
+    const { signal } = pending.controller
+    // Copied and resolved once, so caller-side mutation cannot change what was requested.
+    const request: RetainedRequest = { source, options: { ...options, mode: options.mode ?? DEFAULT_MODE } }
+    this.pending = pending
+    this.retained = request
+    this.lastError = null
+    this.dispatchEvent(new CustomEvent('loadstart'))
+
+    let viewer: OfficeViewer | null = null
+    try {
+      // A loadstart listener may have called load() or destroy() synchronously.
+      signal.throwIfAborted()
+      assertSupportedFormat(request.options.format)
+      const [{ bytes, retain }, Viewer] = await abortable(
+        Promise.all([resolveSource(source, signal), VIEWER_MODULES[request.options.format]()]),
+        signal
+      )
+      signal.throwIfAborted()
+      // Upstream may detach the bytes it is given, so reload() replays a re-readable copy.
+      request.source = retain
+      viewer = new Viewer(this.ensureContainer(), { mode: request.options.mode, wasmUrl: request.options.wasmUrl })
+      pending.viewer = viewer
+      // Upstream settles load() only after its fetch and parse finish, even once destroyed,
+      // so a cancelled load is settled here instead of waiting for it.
+      await abortable(viewer.load(bytes), signal)
+      signal.throwIfAborted()
+    } catch (reason) {
+      if (this.pending !== pending) {
+        // A newer load or destroy() owns the element now; this load's viewer is already destroyed.
+        viewer?.destroy()
+        throw signal.reason
+      }
+      this.pending = null
+      // Stops a source read that may still be running alongside the step that failed.
+      pending.controller.abort(reason)
+      viewer?.destroy()
+      const error = toError(reason)
+      this.lastError = error
+      this.dispatchEvent(new CustomEvent<OfficeViewerLoadErrorDetail>('loaderror', { detail: { error } }))
+      throw error
     }
+
+    this.pending = null
+    const previous = this.viewer
+    this.viewer = viewer
+    this.viewerOptions = request.options
+    previous?.destroy()
+    this.dispatchEvent(new CustomEvent('ready'))
+  }
+
+  private teardown(reason: string): void {
+    this.cancelActiveLoad(reason)
+    this.viewer?.destroy()
+    this.viewer = null
+    this.viewerOptions = null
+    this.lastError = null
+  }
+
+  private cancelActiveLoad(reason: string): void {
+    const pending = this.pending
+    if (!pending) {
+      return
+    }
+    this.pending = null
+    pending.controller.abort(createAbortError(reason))
+    pending.viewer?.destroy()
   }
 
   private ensureContainer(): HTMLElement {
@@ -208,84 +236,81 @@ export class OfficeViewerElement extends HTMLElement {
     throw new Error('Unable to create Shadow DOM render container for office-viewer.')
   }
 
-  private async loadFromAttributes(): Promise<void> {
-    const source = this.src?.trim()
-    const format = parseFormat(this.getAttribute('file-type'))
-    if (!source || !format) {
+  private scheduleSync(): void {
+    if (this.syncScheduled) {
       return
     }
+    this.syncScheduled = true
+    // Coalesced so attributes set together start one load, not one per attribute.
+    queueMicrotask(() => {
+      this.syncScheduled = false
+      if (this.isConnected) {
+        this.sync()
+      }
+    })
+  }
 
-    try {
-      await this.load(source, {
-        format,
-        mode: parseMode(this.getAttribute('mode'))
+  private sync(): void {
+    if (this.attributesDirty) {
+      this.attributesDirty = false
+      if (this.loadFromAttributes()) {
+        return
+      }
+      if (this.attributeDriven) {
+        // src was cleared, so an attribute-driven document has nothing left to show.
+        this.destroy()
+        return
+      }
+    }
+    if (this.restoreOnConnect && this.retained) {
+      this.reload().catch(() => {
+        // start() has already emitted loaderror.
       })
-    } catch {
-      // load() emits loaderror.
     }
   }
 
+  private loadFromAttributes(): boolean {
+    const src = this.getAttribute('src')?.trim()
+    if (!src) {
+      return false
+    }
+    const options: OfficeViewerLoadOptions = {
+      // Validated by start() so a missing or unknown file-type surfaces as loaderror.
+      format: (this.getAttribute('file-type')?.trim().toLowerCase() ?? '') as OfficeFormat,
+      mode: parseMode(this.getAttribute('mode')),
+      wasmUrl: this.getAttribute('wasm-url')?.trim() || undefined
+    }
+    this.start(src, options, true).catch(() => {
+      // start() has already emitted loaderror.
+    })
+    return true
+  }
 }
 
-/**
- * Defines the custom element with the given tag name.
- */
 export function defineOfficeViewerElement(tagName = OFFICE_VIEWER_TAG_NAME): typeof OfficeViewerElement {
-  const existing = typeof customElements === 'undefined' ? undefined : customElements.get(tagName)
-  if (existing) {
-    return existing as typeof OfficeViewerElement
-  }
-
   if (typeof customElements === 'undefined') {
     throw new Error('Custom elements are not available in this runtime.')
   }
-
+  const existing = customElements.get(tagName)
+  if (existing) {
+    return existing as typeof OfficeViewerElement
+  }
   customElements.define(tagName, OfficeViewerElement)
   return OfficeViewerElement
 }
 
-/**
- * Creates the appropriate upstream viewer based on format.
- */
-async function createViewer(
-  options: OfficeViewerLoadOptions,
-  container: HTMLElement
-): Promise<OfficeViewer> {
-  const loadOptions = {
-    mode: options.mode ?? 'worker',
-    wasmUrl: options.wasmUrl
+function assertSupportedFormat(format: unknown): asserts format is OfficeFormat {
+  if (typeof format === 'string' && (OFFICE_FORMATS as readonly string[]).includes(format)) {
+    return
   }
-
-  if (options.format === 'docx') {
-    const { DocxScrollViewer } = await import('@silurus/ooxml/docx')
-    return new DocxScrollViewer(container, loadOptions)
-  }
-  if (options.format === 'pptx') {
-    const { PptxScrollViewer } = await import('@silurus/ooxml/pptx')
-    return new PptxScrollViewer(container, loadOptions)
-  }
-  if (options.format === 'xlsx') {
-    const { XlsxViewer } = await import('@silurus/ooxml/xlsx')
-    return new XlsxViewer(container, loadOptions)
-  }
-
-  throw new Error(`Unsupported format: ${options.format}`)
+  const expected = `Expected one of ${OFFICE_FORMATS.map((name) => `"${name}"`).join(', ')}.`
+  throw new Error(
+    format === undefined || format === null || format === ''
+      ? `Missing format. ${expected}`
+      : `Unsupported format "${String(format)}". ${expected}`
+  )
 }
 
-/**
- * Parses the file-type attribute into an OfficeFormat.
- */
-function parseFormat(value: string | null): OfficeFormat | undefined {
-  const normalized = value?.trim().toLowerCase()
-  if (['docx', 'xlsx', 'pptx'].includes(normalized ?? '')) {
-    return normalized as OfficeFormat
-  }
-  return undefined
-}
-
-/**
- * Parses the mode attribute into an OfficeViewerMode.
- */
 function parseMode(value: string | null): OfficeViewerMode | undefined {
   const normalized = value?.trim().toLowerCase()
   if (normalized === 'worker' || normalized === 'main') {
@@ -294,51 +319,67 @@ function parseMode(value: string | null): OfficeViewerMode | undefined {
   return undefined
 }
 
-/**
- * Converts any supported OfficeSource into the string | ArrayBuffer form upstream
- * accepts. Strings pass through unchanged; Blob/File and ReadableStream are read
- * fully into an ArrayBuffer.
- */
-async function resolveSource(source: OfficeSource): Promise<string | ArrayBuffer> {
-  if (typeof source === 'string' || source instanceof ArrayBuffer) {
-    return source
+async function resolveSource(source: OfficeSource, signal: AbortSignal): Promise<ResolvedSource> {
+  if (typeof source === 'string') {
+    return { bytes: source, retain: source }
+  }
+  if (source instanceof ArrayBuffer) {
+    return { bytes: source, retain: new Blob([source]) }
   }
   if (typeof Blob !== 'undefined' && source instanceof Blob) {
-    return source.arrayBuffer()
+    return { bytes: await source.arrayBuffer(), retain: source }
   }
   if (typeof ReadableStream !== 'undefined' && source instanceof ReadableStream) {
-    return readStreamToArrayBuffer(source)
+    const blob = await readStreamToBlob(source, signal)
+    return { bytes: await blob.arrayBuffer(), retain: blob }
   }
-  throw new Error('Unsupported source type. Expected a URL string, ArrayBuffer, Blob, File, or ReadableStream<Uint8Array>.')
+  throw new Error(
+    'Unsupported source type. Expected a URL string, ArrayBuffer, Blob, File, or ReadableStream<Uint8Array>.'
+  )
 }
 
-/**
- * Reads a ReadableStream<Uint8Array> into an ArrayBuffer.
- */
-async function readStreamToArrayBuffer(stream: ReadableStream<Uint8Array>): Promise<ArrayBuffer> {
+async function readStreamToBlob(stream: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<Blob> {
   const reader = stream.getReader()
-  const chunks: Uint8Array[] = []
-  let total = 0
+  // Cancelling makes a pending read() resolve as done, so a cancelled load stops consuming the stream.
+  const cancel = (): void => {
+    reader.cancel(signal.reason).catch(() => {})
+  }
+  signal.addEventListener('abort', cancel, { once: true })
+
+  const chunks: BlobPart[] = []
   try {
     for (;;) {
       const { done, value } = await reader.read()
       if (done) {
         break
       }
-      if (value) {
-        chunks.push(value)
-        total += value.byteLength
-      }
+      // Chunks typed over ArrayBufferLike are still valid Blob parts at runtime.
+      chunks.push(value as BlobPart)
     }
   } finally {
+    signal.removeEventListener('abort', cancel)
     reader.releaseLock()
   }
+  return new Blob(chunks)
+}
 
-  const buffer = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    buffer.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return buffer.buffer
+// Settles with the signal's reason as soon as it aborts, even if the wrapped promise never settles.
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason)
+    if (signal.aborted) {
+      onAbort()
+      return
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+  })
+}
+
+function createAbortError(message: string): DOMException {
+  return new DOMException(message, 'AbortError')
+}
+
+function toError(reason: unknown): Error {
+  return reason instanceof Error ? reason : new Error(String(reason))
 }
