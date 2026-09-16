@@ -26,7 +26,8 @@ Read `ARCHITECTURE.md` before changing lifecycle behavior or the public API.
   fixtures in both `main` and `worker` modes.
 - `public/fixtures/`: Office files used by browser tests.
 - `demo/`: manual Vite demo, not a production UI. It must only use the public
-  element API.
+  element API: samples, file open and drop, `reload()`/`destroy()`, zoom through
+  `getViewer()`, and panels that mirror the state properties and events.
 
 ## Design Constraints
 
