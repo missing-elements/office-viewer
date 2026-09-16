@@ -46,24 +46,80 @@ The same load can be declared with attributes:
 <office-viewer src="/report.docx" file-type="docx" style="height: 100svh"></office-viewer>
 ```
 
-### CodePen and other hosted editors
+### Where the upstream assets come from
 
-Worker mode loads the format parser as a WebAssembly asset. Hosted editors that
-bundle JavaScript but do not serve package assets need an absolute `wasmUrl`.
-Use the asset that matches the document format and pin it to the installed
-`@silurus/ooxml` version:
+This package is a few kilobytes and leaves `@silurus/ooxml` external. Whatever
+serves that dependency also serves its parser WASM and its render workers, and
+that decides which render mode is available:
+
+| Setup | `worker` mode | `main` mode |
+| --- | --- | --- |
+| Bundler (Vite, webpack, …) | yes | yes |
+| Self-hosted static files with an import map | yes | yes |
+| CDN such as esm.sh (CodePen, JSFiddle, …) | no | yes |
+
+#### Bundlers
+
+Install the package and import it. The bundler resolves `@silurus/ooxml` from
+`node_modules` and emits its WASM and worker files alongside your assets;
+nothing else is needed. The `demo/` folder is a Vite example of this.
+
+#### Self-hosting without a bundler or CDN
+
+Copy `node_modules/@silurus/ooxml/dist/` (about 15 MB) and
+`dist/office-viewer.es.js` to your server, serve `.wasm` files as
+`application/wasm`, and map the bare specifiers with an import map:
+
+```html
+<script type="importmap">
+{
+  "imports": {
+    "@silurus/ooxml/docx": "/vendor/ooxml/docx.mjs",
+    "@silurus/ooxml/xlsx": "/vendor/ooxml/xlsx.mjs",
+    "@silurus/ooxml/pptx": "/vendor/ooxml/pptx.mjs"
+  }
+}
+</script>
+<script type="module">
+  import { defineOfficeViewerElement } from '/vendor/office-viewer.es.js';
+  defineOfficeViewerElement();
+</script>
+```
+
+Everything is on your origin, so both modes work and no third party is
+involved.
+
+#### CodePen and other CDN-loaded pages
+
+Import from a CDN that resolves dependencies, such as esm.sh, and load with
+`mode: 'main'`:
+
+```js
+import { defineOfficeViewerElement } from 'https://esm.sh/@missing-elements/office-viewer';
+
+defineOfficeViewerElement();
+await element.load('/report.docx', { format: 'docx', mode: 'main' });
+```
+
+Pin a version in real pages. Worker mode cannot work here: the render worker
+would have to start from the CDN's origin, which browsers refuse, so the load
+fails with "Worker error".
+
+#### `wasmUrl`
+
+If your setup does not serve the parser WASM next to the upstream module, for
+example an asset pipeline that moves or renames it, pass `wasmUrl` (or the
+`wasm-url` attribute) with the asset for the document format, pinned to the
+installed `@silurus/ooxml` version:
 
 ```js
 await element.load(file, {
   format: 'docx',
-  mode: 'worker',
   wasmUrl: 'https://cdn.jsdelivr.net/npm/@silurus/ooxml@0.86.1/dist/docx_parser_bg.wasm'
 });
 ```
 
-Replace `docx` in both places with `xlsx` or `pptx` for those formats. The
-`wasm-url` attribute takes the same value for declarative loads. The `main`
-mode does not require this workaround.
+Replace `docx` in both places with `xlsx` or `pptx` for those formats.
 
 ## Public API
 
@@ -74,7 +130,7 @@ mode does not require this workaround.
 | `src` | URL to load. Requires `file-type`. Clearing it unloads a document that was loaded from attributes. |
 | `file-type` | Format of `src`: `docx`, `xlsx`, or `pptx`. Required for attribute-driven loading; a missing or unknown value emits `loaderror`. |
 | `mode` | Rendering mode: `worker` (default) or `main`. Unknown values fall back to the default. |
-| `wasm-url` | Optional absolute URL of the parser WASM asset. See the hosted-editor note above. |
+| `wasm-url` | Optional absolute URL of the parser WASM asset. See `wasmUrl` above. |
 
 Attributes set together in one synchronous run start a single load. A `load()`
 call made after attribute changes in the same run outranks them. Moving the
@@ -216,7 +272,7 @@ await element.load(arrayBuffer, { format: detected.ext });
 ## Browser support
 
 - Modern evergreen browsers with custom element support.
-- Web Workers are used by default; fall back to `mode="main"` for environments that block workers.
+- Web Workers are used by default; use `mode="main"` where workers are blocked or when `@silurus/ooxml` is loaded from another origin such as a CDN.
 
 ## License
 

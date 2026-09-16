@@ -24,6 +24,8 @@ Read `ARCHITECTURE.md` before changing lifecycle behavior or the public API.
   `destroy()`.
 - `tests/browser/file-formats.test.ts`: Firefox browser tests using real Office
   fixtures in both `main` and `worker` modes.
+- `tests/build-output.test.ts`: asserts the library build stays a single small
+  entry with `@silurus/ooxml` external.
 - `public/fixtures/`: Office files used by browser tests.
 - `demo/`: manual Vite demo, not a production UI. It must only use the public
   element API: samples, file open and drop, `reload()`/`destroy()`, zoom through
@@ -39,6 +41,10 @@ Read `ARCHITECTURE.md` before changing lifecycle behavior or the public API.
   or wrappers that rename upstream APIs.
 - Keep the Shadow DOM open and retain the `#viewer` container contract.
 - Load format modules dynamically so consumers only fetch the selected format.
+- Keep `@silurus/ooxml` external in the library build. It is a declared
+  dependency that consumers and CDNs resolve themselves; bundling it inlines its
+  WASM and workers as base64, ships a 14 MB package, and makes esm.sh time out.
+  `tests/build-output.test.ts` enforces this.
 - Default to `mode: 'worker'`; preserve `main` as a fallback.
 - Forward supported upstream options, such as `wasmUrl`, instead of duplicating
   upstream loader behavior. Hosted editors may need an absolute `wasmUrl`; the
@@ -102,8 +108,8 @@ pnpm build
 `pnpm test` runs unit and browser tests. Browser tests require Firefox and can
 take longer because they load real fixture documents and Web Workers.
 
-`pnpm test:build` is configured for build-output tests that are not currently
-present; do not rely on it as a validation command until those tests exist.
+`pnpm test:build` builds the library into a temporary directory and checks the
+published shape: one small entry with `@silurus/ooxml` left external.
 
 For manual testing, run `pnpm dev`. It serves the demo at
 `http://127.0.0.1:5173` on a strict port. `pnpm build:demo` writes the static
@@ -120,8 +126,8 @@ demo site to `demo/dist`, and `pnpm preview` serves that build.
 3. Run `pnpm typecheck` after TypeScript changes. Run `pnpm test:unit` for
    logic changes; run `pnpm test:browser` for changes to viewer creation,
    assets, or loading; run both if a change spans both areas. Then run
-   `pnpm build` for package or bundling changes and `pnpm build:demo` for demo
-   or deployment changes.
+   `pnpm build` and `pnpm test:build` for package or bundling changes, and
+   `pnpm build:demo` for demo or deployment changes.
 4. Keep `README.md` and `ARCHITECTURE.md` accurate when public behavior,
    supported sources, modes, or deployment requirements change.
 

@@ -15,6 +15,10 @@ export default defineConfig({
       formats: ['es']
     },
     rollupOptions: {
+      // Consumers resolve @silurus/ooxml (a declared dependency) themselves. Bundling it
+      // inlines its WASM and workers as base64 and balloons the package to 14 MB, which
+      // CDN transpilers such as esm.sh time out on.
+      external: [/^@silurus\/ooxml(\/|$)/],
       output: {
         entryFileNames: 'office-viewer.es.js',
         chunkFileNames: 'assets/[name]-[hash].js',
