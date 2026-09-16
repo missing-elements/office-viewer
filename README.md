@@ -2,6 +2,10 @@
 
 [![npm version](https://img.shields.io/npm/v/@missing-elements/office-viewer?logo=npm&logoColor=fff)](https://www.npmjs.com/package/@missing-elements/office-viewer)
 
+> **Status: not production ready yet.** This is an early 0.x release. The API,
+> lifecycle behavior, and upstream dependency can still change between minor
+> versions. Try it and report issues, but do not rely on it in production.
+
 Headless Web Component orchestration layer for browser-based Office Open XML viewing built on [@silurus/ooxml](https://github.com/yukiyokotani/office-open-xml-viewer#third-party-notices).
 
 `<office-viewer>` is an **orchestration shell**, not a viewer widget. It loads DOCX, XLSX, and PPTX documents, manages the upstream viewer lifecycle, and exposes the upstream viewer instance directly so consumers can build their own UI.
