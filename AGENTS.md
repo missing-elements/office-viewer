@@ -27,7 +27,11 @@ Read `ARCHITECTURE.md` before changing lifecycle behavior or the public API.
 - `public/fixtures/`: Office files used by browser tests.
 - `demo/`: manual Vite demo, not a production UI. It must only use the public
   element API: samples, file open and drop, `reload()`/`destroy()`, zoom through
-  `getViewer()`, and panels that mirror the state properties and events.
+  `getViewer()`, and panels that mirror the state properties and events. It
+  imports the package by name; `vite.demo.config.ts` aliases that to `src/` and
+  builds a self-contained static site into `demo/dist` for deployment.
+- `vite.config.ts` builds the library; `vite.demo.config.ts` serves and builds
+  the demo. `vercel.json` deploys the demo build.
 
 ## Design Constraints
 
@@ -101,8 +105,9 @@ take longer because they load real fixture documents and Web Workers.
 `pnpm test:build` is configured for build-output tests that are not currently
 present; do not rely on it as a validation command until those tests exist.
 
-For manual testing, run `pnpm dev`. Vite is configured for
-`http://127.0.0.1:5173` and uses a strict port.
+For manual testing, run `pnpm dev`. It serves the demo at
+`http://127.0.0.1:5173` on a strict port. `pnpm build:demo` writes the static
+demo site to `demo/dist`, and `pnpm preview` serves that build.
 
 ## Change Workflow
 
@@ -115,7 +120,8 @@ For manual testing, run `pnpm dev`. Vite is configured for
 3. Run `pnpm typecheck` after TypeScript changes. Run `pnpm test:unit` for
    logic changes; run `pnpm test:browser` for changes to viewer creation,
    assets, or loading; run both if a change spans both areas. Then run
-   `pnpm build` for package or bundling changes.
+   `pnpm build` for package or bundling changes and `pnpm build:demo` for demo
+   or deployment changes.
 4. Keep `README.md` and `ARCHITECTURE.md` accurate when public behavior,
    supported sources, modes, or deployment requirements change.
 

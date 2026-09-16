@@ -18,14 +18,15 @@
     "dist"
   ],
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --config vite.demo.config.ts",
     "typecheck": "tsc --noEmit",
     "build": "pnpm typecheck && vite build && tsc --emitDeclarationOnly",
+    "build:demo": "vite build --config vite.demo.config.ts",
     "test": "pnpm test:unit && pnpm test:browser",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:build": "vitest run --config vitest.build.config.ts",
-    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "preview": "vite preview --config vite.demo.config.ts --host 127.0.0.1 --port 4173",
     "build:cdn": "pnpm build",
     "build:plain-module": "pnpm build"
   },

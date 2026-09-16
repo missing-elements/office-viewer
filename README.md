@@ -22,6 +22,12 @@ Headless Web Component orchestration layer for browser-based Office Open XML vie
 npm install @missing-elements/office-viewer
 ```
 
+## Demo
+
+The demo at [office-viewer-pi.vercel.app](https://office-viewer-pi.vercel.app/)
+is the `demo/` folder built with Vite. Locally, `pnpm dev` serves it from
+source and `pnpm build:demo` writes the same static site to `demo/dist`.
+
 ## Usage
 
 ```html
