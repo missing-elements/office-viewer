@@ -628,7 +628,10 @@
     </main>
 
     <script type="module">
+      import { inject } from "@vercel/analytics"
       import { defineOfficeViewerElement } from '@missing-elements/office-viewer'
+
+      inject()
 
       const SAMPLES = {
         docx: '/fixtures/sample.docx',
